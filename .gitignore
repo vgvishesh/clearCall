@@ -25,3 +25,4 @@ quality/.venv/
 .claude/state/
 .claude/settings.local.json
 .DS_Store
+node_modules/
