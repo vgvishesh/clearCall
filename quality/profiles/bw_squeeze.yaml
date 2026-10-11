@@ -1,0 +1,7 @@
+# bandwidth drops 2000 -> 250 -> 2000 kbps; tests adaptation speed and recovery
+link: { schedule: [ { at_s: 0, up_kbps: 2000 }, { at_s: 30, up_kbps: 250 }, { at_s: 60, up_kbps: 2000 } ], down_kbps: 5000, delay_ms: 40, jitter_ms: 10, loss_pct: 0.5 }
+topology: app-bot
+duration_s: 90
+corpus: [speech_noisy, motion]
+mode: voice
+seed: 1

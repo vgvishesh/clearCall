@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Regression tests for .claude/hooks. Run after editing any hook: scripts/test-hooks.sh
+cd "$(dirname "$0")/.." || exit 1
+H=.claude/hooks; P=$PWD; fails=0
+dec() { jq -rc '.hookSpecificOutput.permissionDecision // .decision // "allow"' 2>/dev/null || echo allow; }
+expect() { # name expected hook json
+  local got; got=$(echo "$4" | "$H/$3" | dec); [[ -z "$got" ]] && got=allow
+  if [[ "$got" == "$2" ]]; then printf '  ✓ %-42s %s\n' "$1" "$got"; else printf '  ✗ %-42s got %s, want %s\n' "$1" "$got" "$2"; fails=$((fails+1)); fi
+}
+b() { jq -n --arg c "$1" '{tool_input:{command:$c}}'; }
+f() { jq -n --arg p "$P/$1" --arg c "$2" '{tool_input:{file_path:$p,content:$c}}'; }
+
+echo "guard_bash"
+expect "rm -rf ~"                   deny  guard_bash.sh "$(b 'rm -rf ~')"
+expect "cat a .p8 key"              deny  guard_bash.sh "$(b 'cat ios/AuthKey_ABC.p8')"
+expect "sed -i thresholds"          deny  guard_bash.sh "$(b "sed -i '' s/80/60/ quality/thresholds.yaml")"
+expect "git commit skipping hooks"  deny  guard_bash.sh "$(b 'git commit --no-verify -m x')"
+expect "force push"                 deny  guard_bash.sh "$(b 'git push --force origin main')"
+expect "sudo"                       deny  guard_bash.sh "$(b 'sudo xcode-select -s /Applications/Xcode.app')"
+expect "wrangler deploy (prod)"     ask   guard_bash.sh "$(b 'pnpm exec wrangler deploy')"
+expect "wrangler deploy staging"    allow guard_bash.sh "$(b 'pnpm exec wrangler deploy --env staging')"
+expect "git push"                   ask   guard_bash.sh "$(b 'git push origin feat/x')"
+expect "make ios-build"             allow guard_bash.sh "$(b 'make ios-build')"
+expect "read thresholds"            allow guard_bash.sh "$(b 'cat quality/thresholds.yaml')"
+expect "redirect into thresholds"   deny  guard_bash.sh "$(b 'echo x > quality/thresholds.yaml')"
+expect "chained rm of ref media"    deny  guard_bash.sh "$(b 'make doctor && rm -r quality/reference-media')"
+expect "heredoc that mentions it"   allow guard_bash.sh "$(b $'cat > doc.md <<\'EOF\'\nnever edit quality/thresholds.yaml; git commit --no-verify is banned\nEOF\necho done')"
+expect "danger after a heredoc"     deny  guard_bash.sh "$(b $'cat > a.md <<EOF\nhi\nEOF\nsudo rm x')"
+
+echo "guard_paths"
+expect "write thresholds.yaml"      deny  guard_paths.sh "$(f quality/thresholds.yaml x)"
+expect "write reference media"      deny  guard_paths.sh "$(f quality/reference-media/a.wav x)"
+expect "edit pbxproj"               deny  guard_paths.sh "$(f ios/BetterApp.xcodeproj/project.pbxproj x)"
+expect "write .dev.vars"            deny  guard_paths.sh "$(f signaling/.dev.vars x)"
+expect "add XCTSkip"                ask   guard_paths.sh "$(f ios/T.swift 'throw XCTSkip("flaky")')"
+expect "add @Ignore"                ask   guard_paths.sh "$(f android/T.kt '@Ignore fun t(){}')"
+expect "normal kotlin"              allow guard_paths.sh "$(f android/A.kt 'fun a() = 1')"
+
+echo "post_edit / stop_verify"
+sid="selftest-$$"; mkdir -p protocol; tmp=protocol/.selftest.json; echo '{}' > "$tmp"
+ctx=$(jq -n --arg p "$P/$tmp" --arg s "$sid" '{session_id:$s,tool_input:{file_path:$p}}' | "$H/post_edit.sh" | jq -r '.hookSpecificOutput.additionalContext // ""')
+[[ "$ctx" == *protocol-change* ]] && echo "  ✓ protocol edit injects protocol-change reminder" || { echo "  ✗ protocol reminder missing"; fails=$((fails+1)); }
+grep -qx "$tmp" ".claude/state/changed-$sid.txt" && echo "  ✓ change recorded for Stop gate" || { echo "  ✗ change not recorded"; fails=$((fails+1)); }
+jq -n --arg s "$sid" '{session_id:$s}' | "$H/stop_verify.sh" >/dev/null; [[ ! -e ".claude/state/changed-$sid.txt" ]] && echo "  ✓ stop gate passes + clears when verify green" || { echo "  ✗ stop gate"; fails=$((fails+1)); }
+rm -f "$tmp" ".claude/state/changed-$sid.txt" ".claude/state/stopblocks-$sid"
+
+((fails==0)) && echo "hooks: all green" || { echo "hooks: $fails failure(s)"; exit 1; }

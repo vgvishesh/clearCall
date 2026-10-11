@@ -1,0 +1,27 @@
+# secrets
+*.p8
+*.p12
+*.jks
+*.keystore
+*.mobileprovision
+.env
+.env.*
+.dev.vars
+**/Secrets.xcconfig
+**/google-services.json
+**/GoogleService-Info.plist
+# generated
+ios/*.xcodeproj/
+ios/build/
+**/DerivedData/
+android/.gradle/
+android/**/build/
+android/local.properties
+signaling/node_modules/
+signaling/.wrangler/
+quality/reports/
+quality/.venv/
+# harness runtime state
+.claude/state/
+.claude/settings.local.json
+.DS_Store

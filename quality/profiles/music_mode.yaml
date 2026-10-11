@@ -1,0 +1,6 @@
+link: { up_kbps: 3000, down_kbps: 10000, delay_ms: 50, jitter_ms: 15, loss_pct: 1 }
+topology: app-bot
+duration_s: 60
+corpus: [music]
+mode: music
+seed: 1

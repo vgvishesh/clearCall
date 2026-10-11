@@ -1,0 +1,6 @@
+link: { up_kbps: 5000, down_kbps: 10000, delay_ms: 150, jitter_ms: 20, loss_pct: 0.5 }   # ~300 ms RTT, e.g. India <-> US
+topology: app-bot
+duration_s: 90
+corpus: [speech_clean, talking_head]
+mode: voice
+seed: 1

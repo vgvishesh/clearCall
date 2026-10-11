@@ -1,0 +1,18 @@
+# PROPOSED by the agent — owner reviews and adopts with:  mv quality/thresholds.proposed.yaml quality/thresholds.yaml
+# Once adopted, agents cannot edit thresholds.yaml (hook-enforced). Numbers are starting targets; tighten after the WhatsApp baseline run (M2).
+# Bandwidth = mean kbps per participant, send+receive, video on.
+defaults:
+  setup_success_rate_min: 0.99
+  time_to_first_frame_ms_max: 1500
+  audio_mouth_to_ear_ms_max: 250        # excluding the profile's configured network delay
+  freeze_ratio_max: 0.01                # totalFreezesDuration / duration
+  audio_concealment_ratio_max: 0.03
+profiles:
+  good_wifi:     { vmaf_min: 85, visqol_speech_min: 4.2, dnsmos_ovrl_min: 3.3, kbps_max: 1500 }
+  4g_typical:    { vmaf_min: 80, visqol_speech_min: 4.0, dnsmos_ovrl_min: 3.2, kbps_max: 1200 }
+  3g_lossy:      { vmaf_min: 60, visqol_speech_min: 3.6, dnsmos_ovrl_min: 3.0, kbps_max: 500, freeze_ratio_max: 0.03, audio_concealment_ratio_max: 0.06 }
+  high_rtt_intl: { vmaf_min: 78, visqol_speech_min: 3.9, kbps_max: 1200, audio_mouth_to_ear_ms_max: 300 }
+  bw_squeeze:    { vmaf_min: 55, visqol_speech_min: 3.6, adapt_down_s_max: 3, recover_up_s_max: 10, freeze_ratio_max: 0.03 }
+  music_mode:    { visqol_audio_min: 4.0, kbps_max: 250 }
+  group_10:      { vmaf_active_speaker_min: 75, visqol_speech_min: 3.9, kbps_max: 2000, cpu_pct_max: 60 }
+# Comparative gate (M2+): for each profile, ≥ WhatsApp's score at ≤ WhatsApp's bandwidth, measured with the same corpus on the same devices.
