@@ -19,3 +19,20 @@ run_logged() {
   echo "  --- last 15 lines ---" >&2; tail -15 "$log" >&2
   return 1
 }
+# Host-wide mutex for CPU-sensitive measurement runs (quality lab, diag) across all worktrees.
+# Parallel measurements on this shared host corrupt each other's numbers, so they queue instead.
+LAB_LOCK="${LAB_LOCK:-$HOME/.cache/clearcall/lab.lock}"
+with_lab_lock() {
+  mkdir -p "$(dirname "$LAB_LOCK")"
+  local waited=0
+  until mkdir "$LAB_LOCK" 2>/dev/null; do
+    local owner; owner=$(cat "$LAB_LOCK/pid" 2>/dev/null || true)
+    if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$LAB_LOCK"; continue; fi  # stale lock
+    ((waited % 30 == 0)) && echo "  … waiting for lab lock held by pid ${owner:-?} ($(cat "$LAB_LOCK/what" 2>/dev/null))" >&2
+    sleep 2; waited=$((waited + 2))
+    ((waited > 3600)) && fail "lab lock wait > 1 h"
+  done
+  echo $$ > "$LAB_LOCK/pid"; echo "$* (${ROOT##*/})" > "$LAB_LOCK/what"
+  trap 'rm -rf "$LAB_LOCK"' EXIT
+  "$@"
+}

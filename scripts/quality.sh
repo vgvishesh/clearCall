@@ -3,4 +3,4 @@
 source "$(dirname "$0")/lib.sh"
 need_scaffold quality/package.json "quality lab"
 "$ROOT/scripts/dev.sh" start
-cd "$ROOT/quality" && pnpm run lab -- --profile "$1"
+cd "$ROOT/quality" && with_lab_lock pnpm run lab -- --profile "$1" "${@:2}"

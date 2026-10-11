@@ -6,4 +6,4 @@ source "$(dirname "$0")/lib.sh"
 need_scaffold quality/package.json "quality lab"
 ensure_deps
 "$ROOT/scripts/dev.sh" start
-cd "$ROOT/quality" && exec pnpm exec tsx src/diag.ts --url "http://localhost:$DEV_PORT" "$@"
+cd "$ROOT/quality" && with_lab_lock pnpm exec tsx src/diag.ts --url "http://localhost:$DEV_PORT" "$@"
