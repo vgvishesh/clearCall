@@ -30,4 +30,4 @@ Verify tuning claims in the quality lab; these are starting points.
 
 ## Cross-browser notes
 - Safari: no `RTCRtpSender.setStreams` gaps, but `setCodecPreferences` exists since 16; `audioLevel` present; `getStats` field coverage smaller (no `freezeCount` on older versions) — treat missing fields as undefined, never crash.
-- Firefox: `setParameters` requires encodings length unchanged; `mediaCapabilities` webrtc type may be unsupported → fall back to default codec order.
+- Firefox: `setParameters` requires encodings length unchanged. Firefox (157+) answers `mediaCapabilities.encodingInfo({type:"webrtc"})` and claims H264 power-efficient, but its H264 sender can go silent for good on a mid-stream `scaleResolutionDownBy` change — the engine ignores that claim (`codecs.untrustedPowerEfficient`), so Gecko keeps the tier order (H264 last). Don't re-trust it without a Firefox 3-party `--repeat-each=10` run.

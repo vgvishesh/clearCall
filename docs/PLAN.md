@@ -9,7 +9,7 @@ Per-feature plans: `docs/plans/<slug>.md`.
 | W0 | Harness + workspace + contracts | web-focused hooks/skills/agents; pnpm workspace builds; `protocol/` + `web/src/core/types.ts` agreed | done |
 | W1 | Parallel build | signaling Worker · WebRTC core · UI/PWA shell (on FakeCallController) · E2E + lab + diag — each green on its branch | done |
 | W2 | Integration: first real call | 2 Chromium peers call each other via `make dev`; `make e2e` 2/3/4-party green | done |
-| W3 | Robustness | reconnect/resume, ICE restart, room full, permissions errors, 10-party E2E, WebKit + Firefox E2E | mostly done (ghost-peer + cam-mute fix in progress) |
+| W3 | Robustness | reconnect/resume, ICE restart, room full, permissions errors, 10-party E2E, WebKit + Firefox E2E | done (open: Firefox reload-mid-call E2E flake ~10 %, pre-existing) |
 | W4 | Quality | lab runs on all profiles; music mode; codec/RED/start-bitrate decisions from data; thresholds revised + adopted | done except shaped (netem) profiles + owner threshold adoption |
 | W5 | Owner device test + deploy | owner `wrangler login`; staging deploy; iPhone + Android real-device checklist incl. background-audio spike | todo |
 | W5b | SFU transport (ADR-0006) | Cloudflare Realtime SfuTransport behind MediaTransport; room switches mesh→SFU under load; group_10 gates | todo (needs owner Cloudflare Realtime creds) |
@@ -26,3 +26,4 @@ Per-feature plans: `docs/plans/<slug>.md`.
 - 2026-10-11 — Plan review (7 blockers fixed in contracts); owner asked for squash-merge policy, full agent autonomy + observability, hybrid mesh/SFU (ADR-0006). W1 agents launched from 6ef1f12.
 - 2026-10-11 — V1 core squash-merged: real 2–10 party calls, 17/17 Chromium E2E (+Firefox/WebKit 2–3 party), diag N=4 0 hard anomalies, first quality report (good_wifi unshaped: VMAF 81.5, DNSMOS BAK 2.48→3.68 from NS, TTFF 848 ms). Threshold compliance moved to W4 (proposed PESQ/kbps gates need revision).
 - 2026-10-12 — W4 squash-merged: good_wifi VMAF 81.5→85.5 at same 1.52 Mbps (lab recorder fix + AV1 for 1:1), 720p ramp 17.5→5.4 s, VP8 for 3–10 (CPU), music mode stereo Opus +16 dB SNR, voice defaults kept (ADR-0007), thresholds v2 proposed. Found pre-existing Firefox 3-party intermittent media stall (2/4 on main) — investigating.
+- 2026-10-12 — Firefox 3-party stall fixed: Firefox H264 sender stalls on mid-call resolution change; Gecko now ignores its H264 power-efficient claim (VP8/AV1 per tier), impolite-only re-offer on tier change. Firefox call-basic 20/20, Chromium 15/15, WebKit 6/6. Untested: Firefox paired with Safari/Chrome-HW-H264 (could still pick H264).
