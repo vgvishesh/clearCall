@@ -675,8 +675,14 @@ export class FakePeerConnection extends Emitter {
     }
   }
 
+  /**
+   * Like Firefox (the strictest engine here): a getStats pending when the pc closes never settles (Chromium and
+   * WebKit resolve it). On an already-closed pc it resolves, as in every engine.
+   */
   async getStats(): Promise<Map<string, Record<string, unknown>>> {
+    const closedBefore = this.signalingState === "closed";
     await Promise.resolve();
+    if (!closedBefore && this.signalingState === "closed") await new Promise<never>(() => {});
     return this.statsFn ? this.statsFn() : new Map();
   }
 

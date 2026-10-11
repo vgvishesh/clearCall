@@ -200,6 +200,25 @@ describe("MeshTransport", () => {
     expect(a.mesh.participants()).toEqual([]);
   });
 
+  it("stats() settles when a pair closes mid-collect (Firefox never settles getStats pending at close)", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    addPeer(w, "Bob");
+    await settle(60);
+    const c = addPeer(w, "Cid");
+    await settle(80);
+    // E2E reload flake: a QA stats() poll landed while the reloader dropped its own ghost pair.
+    const pending = a.mesh.stats();
+    a.mesh.peerLeft(c.id, "left");
+    let done: string[] | "pending" = "pending";
+    void pending.then((s) => {
+      done = s.map((x) => x.name);
+    });
+    await settle(10);
+    expect(done).toEqual(["Bob"]);
+  });
+
   it("signaling drop + resume within grace keeps connected pairs untouched", async () => {
     const w = world();
     const a = addPeer(w, "Ann");

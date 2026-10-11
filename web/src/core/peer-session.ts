@@ -129,6 +129,8 @@ export class PeerSession {
   private remoteOffers = 0;
   private troubleSince: number | null = null;
   private closed = false;
+  /** Rejecters of getStats calls pending on the current pc. */
+  private readonly pendingStats = new Set<(reason: string) => void>();
   private _receivedSignal = false;
   private remoteView: number | undefined;
   private participants = 2;
@@ -564,6 +566,7 @@ export class PeerSession {
     try {
       old.close();
     } catch {}
+    this.abortPendingStats("pc replaced");
     this.clearTimers();
     // Candidates that arrived before the offer belong to the remote pc we're about to answer: keep them.
     const carried = this.pendingCandidates;
@@ -848,8 +851,36 @@ export class PeerSession {
     }
   }
 
+  /**
+   * `pc.getStats()` that always settles. Firefox never settles a getStats promise that is pending when its pc is
+   * closed (Chromium and WebKit resolve it), which would hang every consumer that awaits it: `mesh.stats()` awaits
+   * all peers, so one pair closed mid-collect (a peer leaving, a hidden ghost pair dropped, a rebuild) froze
+   * `__clearcall.stats()` and stopped the stats sampler for the rest of the call (its busy flag never cleared).
+   * Closing or replacing the pc therefore rejects every getStats still pending on it.
+   */
   getStats(): Promise<RTCStatsReport> {
-    return this.pc.getStats();
+    if (this.closed) return Promise.reject(new Error("peer session closed"));
+    return new Promise<RTCStatsReport>((resolve, reject) => {
+      const abort = (reason: string) => reject(new Error(reason));
+      this.pendingStats.add(abort);
+      this.pc.getStats().then(
+        (r) => {
+          this.pendingStats.delete(abort);
+          resolve(r);
+        },
+        (e: unknown) => {
+          this.pendingStats.delete(abort);
+          reject(e instanceof Error ? e : new Error(String(e)));
+        },
+      );
+    });
+  }
+
+  /** Rejects the getStats calls pending on the current pc (it is being closed; see `getStats`). */
+  private abortPendingStats(reason: string) {
+    const pending = [...this.pendingStats];
+    this.pendingStats.clear();
+    for (const abort of pending) abort(reason);
   }
 
   /** Transceivers for tests/diagnostics. */
@@ -889,6 +920,7 @@ export class PeerSession {
     try {
       pc.close();
     } catch {}
+    this.abortPendingStats("peer session closed");
     this.log.info("closed", { peer: short(this.remoteId) });
   }
 }

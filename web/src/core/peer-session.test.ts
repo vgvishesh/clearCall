@@ -639,3 +639,37 @@ describe("PeerSession — encode policy", () => {
     expect(pcOf(b).localOfferRollbacks).toBe(0);
   });
 });
+
+describe("PeerSession — getStats always settles (Firefox drops a getStats pending at pc close)", () => {
+  const outcome = (p: Promise<unknown>) =>
+    p.then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+
+  it("a getStats pending when the session closes rejects instead of hanging", async () => {
+    const { a } = setup();
+    await settle();
+    const pending = outcome(a.s.getStats());
+    a.s.close(); // the fake, like Firefox, never settles the pc's own promise now
+    await settle();
+    expect(await pending).toBe("rejected: peer session closed");
+  });
+
+  it("an injected kill (pc closed first) also settles a pending getStats", async () => {
+    const { a } = setup();
+    await settle();
+    const pending = outcome(a.s.getStats());
+    a.s.kill();
+    await settle();
+    expect(await pending).toBe("rejected: peer session closed");
+  });
+
+  it("getStats on a closed session rejects at once; on an open one it resolves", async () => {
+    const { a, b } = setup();
+    await settle();
+    expect(await outcome(b.s.getStats())).toBe("resolved");
+    a.s.close();
+    expect(await outcome(a.s.getStats())).toBe("rejected: peer session closed");
+  });
+});
