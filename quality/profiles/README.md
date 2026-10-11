@@ -1,1 +1,1 @@
-Network profiles. Fields: `link` (bandwidth kbps up/down, delay ms, jitter ms, loss %, loss model), `topology` (bot-bot | app-bot | app+Nbots), `participants`, `duration_s`, `corpus` (speech_clean | speech_noisy | music | talking_head | motion), `mode` (voice | music), `seed`.
+Network profiles. Fields: `link` (bandwidth kbps up/down, delay ms, jitter ms, loss %, loss model), `topology` (p2p = 2 peers | mesh = `participants` peers), `participants`, `duration_s`, `corpus` (speech_clean | speech_noisy | music | talking_head | motion), `mode` (voice | music), `seed`.

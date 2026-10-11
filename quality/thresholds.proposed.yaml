@@ -8,11 +8,11 @@ defaults:
   freeze_ratio_max: 0.01                # totalFreezesDuration / duration
   audio_concealment_ratio_max: 0.03
 profiles:
-  good_wifi:     { vmaf_min: 85, visqol_speech_min: 4.2, dnsmos_ovrl_min: 3.3, kbps_max: 1500 }
-  4g_typical:    { vmaf_min: 80, visqol_speech_min: 4.0, dnsmos_ovrl_min: 3.2, kbps_max: 1200 }
-  3g_lossy:      { vmaf_min: 60, visqol_speech_min: 3.6, dnsmos_ovrl_min: 3.0, kbps_max: 500, freeze_ratio_max: 0.03, audio_concealment_ratio_max: 0.06 }
-  high_rtt_intl: { vmaf_min: 78, visqol_speech_min: 3.9, kbps_max: 1200, audio_mouth_to_ear_ms_max: 300 }
-  bw_squeeze:    { vmaf_min: 55, visqol_speech_min: 3.6, adapt_down_s_max: 3, recover_up_s_max: 10, freeze_ratio_max: 0.03 }
-  music_mode:    { visqol_audio_min: 4.0, kbps_max: 250 }
-  group_10:      { vmaf_active_speaker_min: 75, visqol_speech_min: 3.9, kbps_max: 2000, cpu_pct_max: 60 }
+  good_wifi:     { vmaf_min: 85, pesq_wb_min: 4.2, dnsmos_ovrl_min: 3.3, kbps_max: 1500 }
+  4g_typical:    { vmaf_min: 80, pesq_wb_min: 4.0, dnsmos_ovrl_min: 3.2, kbps_max: 1200 }
+  3g_lossy:      { vmaf_min: 60, pesq_wb_min: 3.6, dnsmos_ovrl_min: 3.0, kbps_max: 500, freeze_ratio_max: 0.03, audio_concealment_ratio_max: 0.06 }
+  high_rtt_intl: { vmaf_min: 78, pesq_wb_min: 3.9, kbps_max: 1200, audio_mouth_to_ear_ms_max: 300 }
+  bw_squeeze:    { vmaf_min: 55, pesq_wb_min: 3.6, adapt_down_s_max: 3, recover_up_s_max: 10, freeze_ratio_max: 0.03 }
+  music_mode:    { music_mode_better_than_voice: true, kbps_max: 250 }
+  group_10:      { vmaf_thumbnail_min: 60, pesq_wb_min: 3.6, kbps_max: 2000, cpu_pct_max: 80 }
 # Comparative gate (M2+): for each profile, ≥ WhatsApp's score at ≤ WhatsApp's bandwidth, measured with the same corpus on the same devices.

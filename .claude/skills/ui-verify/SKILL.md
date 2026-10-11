@@ -1,16 +1,14 @@
 ---
 name: ui-verify
-description: Visually verify UI on iOS and Android by launching, navigating via deep link, taking screenshots, and inspecting them for parity and polish. Use before declaring any UI work done, and when asked how a screen looks.
+description: Visually verify Clearcall screens at phone and desktop sizes by generating screenshots with Playwright and inspecting them for polish, layout and the dark-calm-minimal design. Use before declaring any UI work done, and when asked how a screen looks.
 ---
 # ui-verify
-1. `make ios-run` and `make android-run` (QA build if the screen needs a fake call: `CONFIG=QA` / `VARIANT=Qa`).
-2. Navigate with deep links (see ios-dev / android-dev). Wait ~2s for animations.
-3. `make screenshots NAME=<screen>` → `quality/reports/screens/<screen>-{ios,android}.png`.
-4. **Read both PNG files** and check:
-   - Same information, same order, same primary action on both platforms (platform-idiomatic chrome is fine).
-   - Tap targets ≥ 44pt / 48dp, nothing truncated or clipped, safe areas respected.
-   - Dark mode: `xcrun simctl ui booted appearance dark`, `adb shell cmd uimode night yes`; screenshot again.
-   - Large text: `xcrun simctl ui booted content_size extra-extra-large`, `adb shell settings put system font_scale 1.5`.
-   - Simplicity bar: a first-time user can call someone from the home screen in ≤2 taps.
-5. Reset appearance/font scale. Report findings with the screenshot paths. Fix and repeat until clean.
-Interactive exploration: mobile-mcp / XcodeBuildMCP can tap and read the accessibility tree; turn any flow you exercise by hand into a Maestro flow in `quality/e2e/`.
+1. `make screenshots` runs the `screens` Playwright project: every screen/state (Home, Lobby, Lobby-permission-denied, Call 1/2/4/7/10 participants, Call with music mode sheet, Ended, Room full, Unsupported) using `?fake=1&scenario=<name>` (FakeCallController scenarios) at iPhone 15, Pixel 7 and 1440×900 → `quality/reports/screens/<screen>-<device>.png`.
+2. **Open and look at each relevant PNG** (Read tool). Check:
+   - Dark, calm, minimal: one accent color, no visual noise, consistent radii/spacing from tokens.
+   - Thumb reach: primary controls in the bottom third on phones; tap targets ≥ 48px; safe areas respected (no controls under the home indicator/notch).
+   - Text: nothing truncated or overlapping; names ellipsize; contrast ≥ 4.5:1.
+   - Grids: 1/2/3–4/5–10 layouts use space well in portrait and landscape; self-view never covers a face in 1:1.
+   - States: muted/camera-off/poor-connection indicators readable at thumbnail size.
+3. Light mode outside the call screen: add `colorScheme: 'light'` variant when touching Home/Lobby.
+4. Fix, re-run, re-inspect. Report with screenshot paths.
