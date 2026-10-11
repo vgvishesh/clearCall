@@ -127,6 +127,8 @@ function setup(
 }
 
 const pcOf = (side: Side) => asFake(side.s.pc);
+const offersSent = (side: Side) =>
+  side.sent.filter((p) => p.k === "sdp" && p.description.type === "offer").length;
 
 function expectThreeMLines(side: Side) {
   const pc = pcOf(side);
@@ -566,7 +568,7 @@ describe("PeerSession — encode policy", () => {
     b.s.setParticipants(4);
     await settle();
     const n1 = sdps();
-    expect(n1).toBeGreaterThan(n0); // offer + answer (glare resolved by perfect negotiation)
+    expect(n1).toBe(n0 + 2); // one offer (impolite side only) + its answer, no glare
     a.s.setParticipants(3); // still tier 4
     b.s.setParticipants(3);
     await settle();
@@ -575,5 +577,65 @@ describe("PeerSession — encode policy", () => {
     expect(pcOf(b).signalingState).toBe("stable");
     expectThreeMLines(a);
     expectThreeMLines(b);
+  });
+
+  /**
+   * A third peer joins → both sides of an existing pair cross the codec tier at the same moment. Before: both
+   * re-offered, so every join glared and the polite side's offer was rolled back (one wasted offer, a rollback right
+   * after the policy's setParameters). Now only the impolite side offers; the polite side's order goes into its answer.
+   */
+  it("both sides crossing a tier at once: one offer, no rolled-back local offer, new order + caps on both", async () => {
+    const { a, b, clock } = setup({
+      codecPrefs: { red: false, videoOrder: ["video/H264"] },
+      caps: true,
+    });
+    await settle();
+    const [a0, b0] = [offersSent(a), offersSent(b)];
+    const bVideo = pcOf(b).getTransceivers()[1]!;
+    const bPrefsBefore = bVideo.codecPreferences;
+    // Like the mesh on `peer-joined`: both sides learn the third peer at once (polite b first, the worst order).
+    b.s.setParticipants(3);
+    a.s.setParticipants(3);
+    await settle(40);
+    expect(offersSent(a) - a0).toBe(1); // impolite side re-offers
+    expect(offersSent(b) - b0).toBe(0); // polite side only answers
+    for (const side of [a, b]) {
+      expect(pcOf(side).localOfferRollbacks).toBe(0);
+      expectThreeMLines(side);
+      expect(side.s.status).toBe("connected");
+    }
+    // The polite side's new tier order still applies — to its answer.
+    expect(bVideo.codecPreferences).not.toBe(bPrefsBefore);
+    expect(bVideo.sender.params.encodings[0]).toMatchObject({ scaleResolutionDownBy: 2 });
+    // No stray fallback offer later either.
+    await advanceAndSettle(clock, 10_000, 1000);
+    expect(offersSent(b) - b0).toBe(0);
+  });
+
+  it("polite side re-offers for a tier change only if the impolite side doesn't within politeExtraMs", async () => {
+    const { a, b, clock } = setup({ codecPrefs: { red: false, videoOrder: null }, caps: true });
+    await settle();
+    const b0 = offersSent(b);
+    b.s.setParticipants(3); // only the polite side sees the third peer (e.g. a still hides it)
+    await advanceAndSettle(clock, 3900, 100);
+    expect(offersSent(b)).toBe(b0);
+    await advanceAndSettle(clock, 200, 100);
+    expect(offersSent(b)).toBe(b0 + 1);
+    expect(pcOf(a).signalingState).toBe("stable");
+    expect(pcOf(b).signalingState).toBe("stable");
+    expectThreeMLines(a);
+    expectThreeMLines(b);
+  });
+
+  it("a polite tier fallback is dropped once the impolite side's offer arrives", async () => {
+    const { a, b, clock } = setup({ codecPrefs: { red: false, videoOrder: null }, caps: true });
+    await settle();
+    const b0 = offersSent(b);
+    b.s.setParticipants(3);
+    await advanceAndSettle(clock, 2000, 100);
+    a.s.setParticipants(3); // impolite side catches up within the window
+    await advanceAndSettle(clock, 10_000, 500);
+    expect(offersSent(b)).toBe(b0);
+    expect(pcOf(b).localOfferRollbacks).toBe(0);
   });
 });

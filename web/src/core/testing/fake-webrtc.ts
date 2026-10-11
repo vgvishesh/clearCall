@@ -292,6 +292,8 @@ export class FakePeerConnection extends Emitter {
   setConfigurationCalls: RTCConfiguration[] = [];
   restartIceCalls = 0;
   addTransceiverCalls = 0;
+  /** Local offers discarded by a rollback (explicit, or implicit on a glaring remote offer). */
+  localOfferRollbacks = 0;
   addedCandidates: unknown[] = [];
   sdpLog: { dir: "local" | "remote"; type: string; sdp: string }[] = [];
   /** Optional hook for getStats(). */
@@ -552,6 +554,7 @@ export class FakePeerConnection extends Emitter {
   }
 
   private rollback() {
+    if (this.signalingState === "have-local-offer") this.localOfferRollbacks++;
     for (const t of this.transceivers) t.pendingMid = null;
     // Transceivers created by a remote offer that never completed are removed on rollback.
     for (const t of [...this.transceivers])

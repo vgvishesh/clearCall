@@ -1,10 +1,12 @@
 /**
  * Per-participant evidence capture: console messages, page errors, failed requests (+ HTTP >= 400),
- * and — at teardown — the QA hook's structured logs and stats timeline. Everything is attached to the
+ * and — at teardown — the QA hook's structured logs, stats snapshot and stats timeline. Everything is attached to the
  * Playwright test result so a failing multi-party test is debuggable from the report alone.
  */
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { Page, TestInfo } from "@playwright/test";
-import { hasQaHook, qaLogs, qaTimeline } from "./qa.ts";
+import { hasQaHook, type LogEntry, qaLogs, qaStats, qaTimeline } from "./qa.ts";
 
 export interface CapturedEvent {
   t: number;
@@ -54,13 +56,23 @@ export class Diagnostics {
       .join("\n");
   }
 
-  /** Attaches console/errors/requests and (best effort, bounded) QA logs + stats timeline. */
+  /**
+   * Attaches console/errors/requests and (best effort, bounded) the QA hook's `logs()`, a final `stats()` snapshot
+   * and `statsTimeline()`. When the test failed, every attachment is also written as a file into the test's output
+   * dir (`e2e/test-results/<test>/`): `scripts/e2e.sh` runs the line reporter, which keeps no copy of body
+   * attachments, so without files the engine logs of a failed run would be lost.
+   */
   async attach(testInfo: TestInfo, page: Page | undefined): Promise<void> {
     const safe = this.label.replace(/[^\w.-]+/g, "_");
-    await testInfo.attach(`${safe}-console.txt`, {
-      body: this.format() || "(no console output)",
-      contentType: "text/plain",
-    });
+    const failed = testInfo.status !== testInfo.expectedStatus;
+    const put = async (name: string, body: string, contentType: string) => {
+      if (!failed) return testInfo.attach(name, { body, contentType });
+      const path = testInfo.outputPath(name);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, body);
+      await testInfo.attach(name, { path, contentType });
+    };
+    await put(`${safe}-console.txt`, this.format() || "(no console output)", "text/plain");
     if (!page || page.isClosed()) return;
     const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | undefined> =>
       Promise.race([p, new Promise<undefined>((r) => setTimeout(() => r(undefined), ms))]).catch(
@@ -68,16 +80,24 @@ export class Diagnostics {
       );
     if (!(await withTimeout(hasQaHook(page), 2000))) return;
     const logs = await withTimeout(qaLogs(page), 3000);
-    if (logs)
-      await testInfo.attach(`${safe}-qa-logs.json`, {
-        body: JSON.stringify(logs, null, 1),
-        contentType: "application/json",
-      });
+    if (logs) {
+      await put(`${safe}-qa-logs.txt`, formatLogs(logs), "text/plain");
+      await put(`${safe}-qa-logs.json`, JSON.stringify(logs, null, 1), "application/json");
+    }
+    const stats = await withTimeout(qaStats(page), 3000);
+    if (stats) await put(`${safe}-stats.json`, JSON.stringify(stats, null, 1), "application/json");
     const timeline = await withTimeout(qaTimeline(page), 3000);
-    if (timeline)
-      await testInfo.attach(`${safe}-stats-timeline.json`, {
-        body: JSON.stringify(timeline),
-        contentType: "application/json",
-      });
+    if (timeline) await put(`${safe}-stats-timeline.json`, JSON.stringify(timeline), "application/json");
   }
+}
+
+/** One line per QA log entry (`HH:MM:SS.mmm level [scope] msg {data}`), readable without tooling. */
+export function formatLogs(logs: readonly LogEntry[]): string {
+  if (!logs.length) return "(no QA log entries)";
+  return logs
+    .map((e) => {
+      const ts = new Date(e.t).toISOString().slice(11, 23);
+      return `${ts} ${e.level.padEnd(5)} [${e.scope}] ${e.msg}${e.data ? ` ${JSON.stringify(e.data)}` : ""}`;
+    })
+    .join("\n");
 }

@@ -622,3 +622,51 @@ describe("stats consumers keep independent baselines (regression: QA polling zer
     }
   }, 20_000); // wall-clock budget: ~1200 settle steps take ~5 s alone, more when suites run in parallel
 });
+
+describe("video codec order per engine (fix/firefox-3party-stall)", () => {
+  const FIREFOX = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0";
+  const SAFARI =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15";
+  const video = ["video/VP8", "video/VP9", "video/H264", "video/AV1"].map((mimeType) => ({
+    mimeType,
+    clockRate: 90000,
+  }));
+  // What both Firefox 157 and Safari report for type "webrtc": only H264 is power-efficient.
+  const mediaCapabilities = {
+    encodingInfo: async (cfg: unknown) => ({
+      supported: true,
+      powerEfficient: (cfg as { video: { contentType: string } }).video.contentType.startsWith("video/H264"),
+    }),
+  };
+  const firstVideoCodec = (w: World) => {
+    const pc = asFake(w.rtc.pcs()[0]);
+    const prefs = pc.getTransceivers().find((t) => t.kind === "video")!.codecPreferences as
+      | { mimeType: string }[]
+      | null;
+    return prefs?.[0]?.mimeType;
+  };
+
+  it.each([
+    [
+      "Firefox: H264's power-efficient claim is ignored → tier order (AV1 first at 2 people)",
+      FIREFOX,
+      "video/AV1",
+    ],
+    ["Safari: hardware H264 first", SAFARI, "video/H264"],
+  ])("%s", async (_n, userAgent, expected) => {
+    const w = createWorld();
+    const deps = { userAgent, mediaCapabilities, getCapabilities: () => ({ codecs: video }) };
+    const host = createParticipant(w, deps);
+    await host.c.prepare({});
+    await settle();
+    await host.c.join("Ann");
+    await settle(30);
+    const guest = createParticipant(w, deps);
+    await guest.c.prepare({ link: host.c.state.value.link! });
+    await settle();
+    await guest.c.join("Bob");
+    await settle(60);
+    expectConnected([host, guest]);
+    expect(firstVideoCodec(w)).toBe(expected);
+  });
+});

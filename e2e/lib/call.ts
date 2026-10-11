@@ -102,9 +102,10 @@ function counters(s: QaPeerStats, video: boolean) {
  */
 export async function expectMediaFlowing(
   page: Page,
-  opts: { video?: boolean; windowMs?: number; timeout?: number; from?: string[] } = {},
+  opts: { video?: boolean; windowMs?: number; timeout?: number; from?: string[]; label?: string } = {},
 ): Promise<void> {
   const video = opts.video ?? true;
+  const who = opts.label ? ` at ${opts.label}` : "";
   const windowMs = opts.windowMs ?? 2000;
   const pick = (all: QaPeerStats[]) => (opts.from ? all.filter((s) => opts.from!.includes(s.id)) : all);
   const t0 = Date.now();
@@ -114,17 +115,28 @@ export async function expectMediaFlowing(
     .poll(
       async () => {
         const now = pick(await qaStats(page));
-        const stalled = now
-          .filter((s) => {
-            const b = base.get(s.id);
-            const c = counters(s, video);
-            return !b || c.bytes <= b.bytes || (video && c.frames <= b.frames);
-          })
-          .map((s) => s.name || s.id);
+        // Each stalled peer is reported with what stalled (audio+video bytes and/or decoded frames) so the failure
+        // message alone tells the direction and the kind.
+        const stalled: string[] = [];
+        for (const s of now) {
+          const b = base.get(s.id);
+          const c = counters(s, video);
+          const what = !b
+            ? ["new"]
+            : [
+                ...(c.bytes <= b.bytes ? [`bytes ${b.bytes}→${c.bytes}`] : []),
+                ...(video && c.frames <= b.frames ? [`frames ${b.frames}→${c.frames}`] : []),
+              ];
+          if (what.length) stalled.push(`${s.name || s.id} (${what.join(", ")})`);
+        }
         if (Date.now() - t0 < windowMs) return ["(window not elapsed)"];
         return stalled;
       },
-      { timeout: opts.timeout ?? 10_000, intervals: [250, 500], message: "remote peers with stalled media" },
+      {
+        timeout: opts.timeout ?? 10_000,
+        intervals: [250, 500],
+        message: `remote peers with stalled media${who}`,
+      },
     )
     .toEqual([]);
 }

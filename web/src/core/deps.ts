@@ -69,6 +69,8 @@ export interface CoreDeps {
   mediaDevices: MediaDevicesLike | undefined;
   getCapabilities: (kind: "audio" | "video") => { codecs: CodecLike[] } | null;
   mediaCapabilities: MediaCapabilitiesLike | undefined;
+  /** `navigator.userAgent` — only for engine-specific media workarounds (codecs.untrustedPowerEfficient). */
+  userAgent: string;
   location: { origin: string; protocol: string; host: string; search: string; href: string };
   history: { replaceState(data: unknown, unused: string, url: string): void } | undefined;
   document: DocumentDeps | undefined;
@@ -186,6 +188,7 @@ export function defaultDeps(): CoreDeps {
       }
     },
     mediaCapabilities: nav.mediaCapabilities as unknown as MediaCapabilitiesLike | undefined,
+    userAgent: typeof nav.userAgent === "string" ? nav.userAgent : "",
     location: loc,
     history: g.history,
     document: doc,

@@ -7,6 +7,8 @@
  *   created, set sendrecv + replaceTrack, create `ctl` (after SRD, so no extra negotiation), answer.
  *   ⇒ every pair has exactly 3 m-lines (audio, video, application), even after glare.
  * - Later renegotiations (mode change, ICE restart) use W3C perfect negotiation; polite = smaller peerId.
+ *   Renegotiations both sides would start at the same moment (codec-tier change, ICE restart) are started by the
+ *   impolite side only, with a delayed polite fallback: glare there is avoidable (see setParticipants).
  * - Initial glare (both sides think they are the offerer, e.g. after a resume): an offerer that has never completed
  *   a negotiation and receives an offer rebuilds itself as an answerer (polite, or impolite without an offer of its
  *   own in flight); the impolite side with an offer in flight ignores the remote offer. This keeps 3 m-lines.
@@ -114,6 +116,8 @@ export class PeerSession {
   private restarts = 0;
   private restartTimer: TimerHandle | undefined;
   private connectTimer: TimerHandle | undefined;
+  /** Polite side's fallback codec-tier offer (see setParticipants). */
+  private tierTimer: TimerHandle | undefined;
   private restartWanted = false;
   /** The initial offer was deferred because signaling was down. */
   private offerWanted = false;
@@ -747,17 +751,35 @@ export class PeerSession {
     if (this.negotiatedOnce) void this.makeOffer("mode");
   }
 
+  /**
+   * Participant count changed (mesh policy input). Crossing a codec tier (ADR-0005) re-applies the codec order and
+   * renegotiates — from ONE side only. Both sides of a pair learn of a joiner/leaver at the same moment, so if both
+   * re-offered they would always glare: a wasted offer and a rollback on the polite side right after the policy's
+   * setParameters, i.e. extra encoder reconfiguration exactly when Firefox's H264 sender is fragile (codecs.ts
+   * untrustedPowerEfficient). So, like ICE restarts (FLOWS §6): the impolite side offers; the polite side's new order
+   * shapes its answer, and it offers itself only if no remote offer arrived within `politeExtraMs`.
+   */
   setParticipants(n: number): void {
     if (n === this.participants) return;
     const tierChanged = codecTier(n) !== codecTier(this.participants);
     this.participants = n;
     void this.applyEncodings();
-    if (tierChanged && this.bound && !this.closed) {
-      // Codec order is per tier (ADR-0005): re-apply and renegotiate so the pair switches codec (perfect negotiation
-      // handles both sides doing this at once). Before the first negotiation the new order simply applies.
-      this.applyCodecs();
-      if (this.negotiatedOnce) void this.makeOffer("codec-tier");
+    if (!tierChanged || !this.bound || this.closed) return;
+    this.applyCodecs(); // before the first negotiation the new order simply applies
+    if (!this.negotiatedOnce) return;
+    if (!this.polite) {
+      void this.makeOffer("codec-tier");
+      return;
     }
+    const offersBefore = this.remoteOffers;
+    const tier = codecTier(n);
+    this.o.clock.clearTimeout(this.tierTimer);
+    this.tierTimer = this.o.clock.setTimeout(() => {
+      this.tierTimer = undefined;
+      if (this.closed || !this.negotiatedOnce || codecTier(this.participants) !== tier) return;
+      if (this.remoteOffers > offersBefore) return; // the impolite side renegotiated: our order went into the answer
+      void this.makeOffer("codec-tier-polite");
+    }, this.o.politeExtraMs);
   }
 
   setRemoteView(height: number): void {
@@ -857,6 +879,7 @@ export class PeerSession {
     if (this.closed) return;
     this.closed = true;
     this.clearTimers();
+    this.o.clock.clearTimeout(this.tierTimer);
     const pc = this.pc;
     pc.onnegotiationneeded = pc.onicecandidate = pc.ontrack = null;
     pc.onconnectionstatechange = pc.onsignalingstatechange = null;

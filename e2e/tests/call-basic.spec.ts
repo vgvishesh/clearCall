@@ -31,7 +31,7 @@ test.describe("mesh calls", () => {
       const names = ["Alice", "Bob", "Carol", "Dave"].slice(0, n);
       const ps = await call.participants(...names);
       await setupCall(ps, 30_000);
-      await Promise.all(ps.map((p) => expectMediaFlowing(p.page, { timeout: 20_000 })));
+      await Promise.all(ps.map((p) => expectMediaFlowing(p.page, { timeout: 20_000, label: p.name })));
       for (const p of ps) {
         await expectAudio(p.page, { timeout: 20_000 });
         await expect(p.page.locator(tid(TID.participantTile))).toHaveCount(n - 1);

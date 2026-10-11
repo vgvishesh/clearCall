@@ -94,6 +94,7 @@ export function createParticipant(w: World, overrides: Partial<CoreDeps> = {}): 
     mediaDevices: devices,
     getCapabilities: () => null,
     mediaCapabilities: undefined,
+    userAgent: "",
     location: {
       origin: "https://cc.test",
       protocol: "https:",

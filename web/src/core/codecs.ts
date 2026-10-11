@@ -3,7 +3,9 @@
  * - Video: power-efficient (hardware) encoders first, decided once per session via
  *   `navigator.mediaCapabilities.encodingInfo({type:"webrtc"})` (battery/thermals on phones). Then the software order
  *   for the mesh tier (`tierVideoPreference`, ADR-0005 W4 evidence): quality per bit where 1–2 encodes run, cheapest
- *   encoder where many do. API missing (Firefox) → tier order only. `?vcodec=` (lab) forces one codec first.
+ *   encoder where many do. API missing → tier order only. Firefox's H264 power-efficient claim is ignored
+ *   (`untrustedPowerEfficient`: its H264 sender stalls on mid-stream resolution changes). `?vcodec=` (lab) forces one
+ *   codec first.
  * - Audio: Opus first. RED (`audio/red`) only when the `red` flag is on (OFF by default; the quality lab flips it
  *   with `?red=1` and decides from `3g_lossy` data). When off, RED is removed so it is never negotiated.
  */
@@ -85,17 +87,42 @@ export function audioCodecOrder<T extends CodecLike>(codecs: readonly T[], red: 
 }
 
 /**
+ * Codecs whose `powerEfficient: true` must not move them first on this engine.
+ *
+ * Firefox (Gecko) reports H264 as power-efficient for `type:"webrtc"`, but its H264 sender intermittently goes silent
+ * for good (bytesSent frozen, no error/event) when the encode resolution changes mid-stream via
+ * `setParameters({scaleResolutionDownBy})` — which the mesh policy does whenever the participant tier or a receiver's
+ * view changes. Measured in the Firefox 3-party E2E (2→3 tier change, Firefox 157): H264 2/10 passes; same build with
+ * VP8, VP9 or AV1 forced 10/10 each; H264 with the scale change suppressed 10/10. Gecko therefore keeps the tier's
+ * software order (H264 last), as it did before Firefox shipped `encodingInfo({type:"webrtc"})`.
+ */
+export function untrustedPowerEfficient(userAgent: string): readonly string[] {
+  return isGecko(userAgent) ? ["video/H264"] : [];
+}
+
+/** Firefox desktop/Android (Gecko). Firefox on iOS ("FxiOS") is WebKit and doesn't match. */
+export function isGecko(userAgent: string): boolean {
+  return /\bFirefox\/\d/.test(userAgent) && !/\bFxiOS\//.test(userAgent);
+}
+
+/**
  * The power-efficient (hardware) video encoders of this device, in VIDEO_PREFERENCE order — they go before the tier's
- * software order. null when the capabilities API is missing/failing or nothing is power-efficient.
+ * software order. null when the capabilities API is missing/failing or nothing is power-efficient. `untrusted` codecs
+ * (see untrustedPowerEfficient) are never probed, so they keep their tier position.
  */
 export async function chooseVideoCodecOrder(
   available: readonly CodecLike[] | null | undefined,
   mediaCapabilities: MediaCapabilitiesLike | undefined,
   log: Logger = nullLogger,
   probe = { width: 1280, height: 720, bitrate: 1_500_000, framerate: 30 },
+  untrusted: readonly string[] = [],
 ): Promise<string[] | null> {
   if (!available?.length || !mediaCapabilities?.encodingInfo) return null;
-  const present = VIDEO_PREFERENCE.filter((m) => available.some((c) => lower(c.mimeType) === lower(m)));
+  if (untrusted.length) log.info("video codecs: power-efficient claim ignored", { untrusted });
+  const present = VIDEO_PREFERENCE.filter(
+    (m) =>
+      !untrusted.some((u) => lower(u) === lower(m)) && available.some((c) => lower(c.mimeType) === lower(m)),
+  );
   if (present.length === 0) return null;
   try {
     const infos = await Promise.all(

@@ -24,6 +24,7 @@ Both trickle signal(enc ice) …; "ctl" opens → both send state{name,mic,cam,m
 ```
 - The answerer **never** calls `addTransceiver` for a pair. Invariant (unit-tested): every pair has exactly 3 m-lines (audio, video, application), even after glare.
 - Later renegotiations (codec/mode changes, ICE restarts) use **perfect negotiation** with polite = lexicographically smaller peerId.
+- A renegotiation both sides would start at the same moment is started by the **impolite** side only: ICE restarts (§6) and the codec-tier change when the participant count crosses an ADR-0005 tier (both sides see the `peer-joined`/`peer-left` at once). The polite side applies its new codec order to its answer and offers itself only if no remote offer arrived within 4 s. Reason: before this, every 2→3 join glared on every existing pair (a wasted offer plus a rollback right after the encode-cap `setParameters`).
 - Camera off/on and mic mute never renegotiate: `replaceTrack(null|track)` / `track.enabled`.
 
 ## 2. Hello semantics — hello resets a pair

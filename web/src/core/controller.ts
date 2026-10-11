@@ -11,7 +11,7 @@ import { batch, signal } from "@preact/signals";
 import { SpeakerTracker } from "./active-speaker.ts";
 import { RemoteAudio } from "./audio-out.ts";
 import type { TimerHandle } from "./clock.ts";
-import { chooseVideoCodecOrder, forcedVideoOrder } from "./codecs.ts";
+import { chooseVideoCodecOrder, forcedVideoOrder, untrustedPowerEfficient } from "./codecs.ts";
 import { type CoreDeps, defaultDeps, type WakeLockLike } from "./deps.ts";
 import { createLog, errInfo, type LogSink, short } from "./log.ts";
 import { LocalMedia } from "./media.ts";
@@ -284,6 +284,8 @@ class Controller implements CallController {
           d.getCapabilities("video")?.codecs,
           d.mediaCapabilities,
           this.log.scope("codecs"),
+          undefined,
+          untrustedPowerEfficient(d.userAgent),
         );
 
     this.media = new LocalMedia({

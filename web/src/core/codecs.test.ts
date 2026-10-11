@@ -7,6 +7,7 @@ import {
   forcedVideoOrder,
   orderCodecs,
   tierVideoPreference,
+  untrustedPowerEfficient,
 } from "./codecs.ts";
 import { videoLabFlags } from "./deps.ts";
 
@@ -60,6 +61,27 @@ describe("codec ordering", () => {
   });
 });
 
+describe("untrustedPowerEfficient", () => {
+  const UA = {
+    firefoxMac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
+    firefoxAndroid: "Mozilla/5.0 (Android 14; Mobile; rv:150.0) Gecko/150.0 Firefox/150.0",
+    firefoxIos:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/150.0 Mobile/15E148 Safari/605.1.15",
+    safari:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
+    chrome:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  };
+  it("Gecko (desktop + Android) distrusts H264's power-efficient claim; WebKit/Blink trust everything", () => {
+    expect(untrustedPowerEfficient(UA.firefoxMac)).toEqual(["video/H264"]);
+    expect(untrustedPowerEfficient(UA.firefoxAndroid)).toEqual(["video/H264"]);
+    expect(untrustedPowerEfficient(UA.firefoxIos)).toEqual([]); // WebKit underneath
+    expect(untrustedPowerEfficient(UA.safari)).toEqual([]);
+    expect(untrustedPowerEfficient(UA.chrome)).toEqual([]);
+    expect(untrustedPowerEfficient("")).toEqual([]);
+  });
+});
+
 describe("chooseVideoCodecOrder", () => {
   it("returns only the power-efficient codecs (they go before the tier order)", async () => {
     const encodingInfo = vi.fn(async (cfg: { video: { contentType: string } }) => {
@@ -88,6 +110,21 @@ describe("chooseVideoCodecOrder", () => {
         encodingInfo: async () => ({ supported: true, powerEfficient: false }),
       }),
     ).toBeNull();
+  });
+
+  it("never puts an untrusted codec first (not even probed): Firefox H264 → tier order", async () => {
+    const encodingInfo = vi.fn(async (cfg: { video: { contentType: string } }) => ({
+      supported: true,
+      powerEfficient: cfg.video.contentType.startsWith("video/H264"), // what Firefox 157 reports
+    }));
+    expect(
+      await chooseVideoCodecOrder(VIDEO, { encodingInfo }, undefined, undefined, ["video/H264"]),
+    ).toBeNull();
+    expect(encodingInfo.mock.calls.map(([cfg]) => cfg.video.contentType)).not.toContainEqual(
+      expect.stringMatching(/^video\/H264/),
+    );
+    // Other engines keep the hardware-first rule.
+    expect(await chooseVideoCodecOrder(VIDEO, { encodingInfo })).toEqual(["video/H264"]);
   });
 
   it("falls back to browser default when the API is missing, throws or knows nothing", async () => {
