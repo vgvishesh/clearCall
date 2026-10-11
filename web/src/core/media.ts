@@ -3,6 +3,11 @@
  * light off), camera flip, mode switch, a local level meter, and recovery from track loss (iOS background,
  * device unplug) on `visibilitychange` / `devicechange` / track `ended`.
  *
+ * `camOn` is what peers and the UI see: the user wants the camera AND the browser is actually delivering frames. When
+ * the browser silences our capture (track `mute`: WebKit when another page takes the camera, iOS in the background)
+ * or ends it, `camOn` drops to false (peers show the camera-off avatar) while the user's intent is kept; `unmute`
+ * restores it, `ended` goes through recovery (re-acquire on visible).
+ *
  * iOS rule: stop the old track BEFORE acquiring its replacement (iOS allows one capture per device; a second
  * getUserMedia otherwise mutes/ends the first), then hand the new track to the transport (`replaceTrack`).
  */
@@ -115,6 +120,8 @@ export class LocalMedia {
   private stopped = false;
   private listening = false;
   private recovering = new Set<"audio" | "video">();
+  /** The user wants the camera on (button state); `state.camOn` additionally requires a live, unmuted track. */
+  private camWanted = true;
   private readonly log: Logger;
 
   constructor(private readonly o: LocalMediaOptions) {
@@ -188,7 +195,8 @@ export class LocalMedia {
       if (wantVideo && !video) st.camAvailable = false;
       st.micOn = !!audio && st.micOn;
       if (audio) audio.enabled = st.micOn;
-      st.camOn = !!video;
+      this.camWanted = !!video;
+      this.syncCam();
       const kinds = errors.map((x) => classifyMediaError(x.e));
       st.error =
         errors.length === 0
@@ -228,6 +236,7 @@ export class LocalMedia {
     return this.exclusive(async () => {
       const st = this.state;
       if (!on) {
+        this.camWanted = false;
         if (st.video) {
           st.video.stop(); // camera light off
           st.video = null;
@@ -239,14 +248,21 @@ export class LocalMedia {
         this.emit();
         return;
       }
-      if (st.video && st.video.readyState === "live") {
-        st.camOn = true;
+      if (st.video && st.video.readyState === "live" && !st.video.muted) {
+        this.camWanted = true;
+        this.syncCam();
         this.emit();
         return;
       }
+      // None, ended, or silenced by the browser: the user asks for the camera, so (re)capture it.
+      try {
+        st.video?.stop(); // iOS: release before re-acquiring
+      } catch {}
+      st.video = null;
       const track = await this.getTrack("video");
       st.video = track;
-      st.camOn = !!track;
+      this.camWanted = !!track;
+      this.syncCam();
       if (track) {
         st.camAvailable = true;
         if (st.error?.detail?.startsWith("video") && st.audio) st.error = null;
@@ -262,7 +278,7 @@ export class LocalMedia {
     return this.exclusive(async () => {
       const st = this.state;
       const next: Facing = st.facing === "user" ? "environment" : "user";
-      if (!st.camOn) {
+      if (!this.camWanted) {
         st.facing = next;
         this.emit();
         return;
@@ -273,7 +289,8 @@ export class LocalMedia {
       if (track) st.facing = next;
       else track = await this.getTrack("video"); // fall back to the old facing
       st.video = track;
-      st.camOn = !!track;
+      this.camWanted = !!track;
+      this.syncCam();
       this.rebuildStream();
       this.o.onTrack?.("video", track);
       this.log.info("camera switched", { facing: st.facing, ok: !!track });
@@ -369,14 +386,37 @@ export class LocalMedia {
     } catch {}
   }
 
+  /** `camOn` = wanted AND the current track really delivers frames (live, not muted by the browser). */
+  private syncCam(): boolean {
+    const v = this.state.video;
+    const on = this.camWanted && !!v && v.readyState === "live" && !v.muted;
+    if (on === this.state.camOn) return false;
+    this.state.camOn = on;
+    return true;
+  }
+
   private watchTrack(t: MediaStreamTrack) {
-    t.addEventListener?.("ended", () => {
+    const current = () => {
       const st = this.state;
+      return !this.stopped && (t.kind === "audio" ? st.audio : st.video) === t;
+    };
+    t.addEventListener?.("ended", () => {
+      if (!current()) return;
       const kind = t.kind as "audio" | "video";
-      if (this.stopped || (kind === "audio" ? st.audio : st.video) !== t) return;
       this.log.warn("track ended", { kind });
+      if (kind === "video" && this.syncCam()) this.emit();
       void this.recover(kind);
     });
+    if (t.kind !== "video") return;
+    // The browser silences capture without ending it (WebKit: another page took the camera; iOS: backgrounded).
+    // Peers must see camera-off instead of a frozen/black tile; frames resume on `unmute`.
+    for (const type of ["mute", "unmute"] as const) {
+      t.addEventListener?.(type, () => {
+        if (!current()) return;
+        this.log.info(`camera ${type}d by the browser`, { camOn: this.camWanted && type === "unmute" });
+        if (this.syncCam()) this.emit();
+      });
+    }
   }
 
   /** Re-acquire a lost track if it should be live (iOS background, device unplugged). */
@@ -387,7 +427,7 @@ export class LocalMedia {
     return this.exclusive(async () => {
       try {
         const st = this.state;
-        const want = kind === "audio" ? st.micAvailable : st.camOn;
+        const want = kind === "audio" ? st.micAvailable : this.camWanted;
         const cur = kind === "audio" ? st.audio : st.video;
         if (!want || this.stopped) return;
         if (cur && cur.readyState === "live" && !cur.muted) return;
@@ -400,7 +440,8 @@ export class LocalMedia {
           if (track) track.enabled = st.micOn;
         } else {
           st.video = track;
-          st.camOn = !!track;
+          this.camWanted = !!track;
+          this.syncCam();
         }
         this.rebuildStream();
         this.o.onTrack?.(kind, track);
@@ -418,7 +459,7 @@ export class LocalMedia {
     const st = this.state;
     for (const kind of ["audio", "video"] as const) {
       const t = kind === "audio" ? st.audio : st.video;
-      const want = kind === "audio" ? st.micAvailable && !!st.stream : st.camOn;
+      const want = kind === "audio" ? st.micAvailable && !!st.stream : this.camWanted;
       if (want && (!t || t.readyState === "ended" || t.muted)) void this.recover(kind);
     }
     void this.resumeAudioContext();

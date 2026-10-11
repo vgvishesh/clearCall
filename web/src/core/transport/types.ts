@@ -54,7 +54,13 @@ export interface MediaTransport {
   setHidden(hidden: boolean): void;
 
   // ── remote side ──
+  /** Visible remote participants. Peers hidden until heard from (FLOWS §4) are left out. */
   participants(): RemoteInfo[];
+  /**
+   * True while peers listed in a welcome are still being probed (neither heard from nor reported unknown by the
+   * server, bounded by a short timeout). The controller stays in "joining" meanwhile so no ghost tile flashes.
+   */
+  readonly resolving: boolean;
   /** Raw remote audio levels 0..1, cheap enough to poll at ~5 Hz. */
   audioLevels(): Map<string, number>;
   /** Per-participant stats (also refreshes quality badges). */

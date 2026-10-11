@@ -222,6 +222,59 @@ describe("LocalMedia recovery", () => {
     expect(devices.calls.length).toBe(n);
   });
 
+  it("browser-muted camera (another page took it) reports camOn=false until unmuted; no re-capture", async () => {
+    const { media, devices, changes } = setup();
+    await media.acquire();
+    const cam = ft(media.state.video)!;
+    const n = devices.calls.length;
+    const c0 = changes();
+    cam.setMuted(true);
+    expect(media.state.camOn).toBe(false);
+    expect(changes()).toBeGreaterThan(c0);
+    await settle();
+    expect(devices.calls.length).toBe(n); // visible page: wait for the browser to hand it back
+    cam.setMuted(false);
+    expect(media.state.camOn).toBe(true);
+    expect(media.state.video).toBe(cam);
+  });
+
+  it("an ended camera reports camOn=false while hidden, then recovers to camOn=true on visible", async () => {
+    const { media, doc } = setup();
+    await media.acquire();
+    doc.setVisibility("hidden");
+    ft(media.state.video)!.end();
+    expect(media.state.camOn).toBe(false);
+    await settle();
+    expect(media.state.camOn).toBe(false);
+    doc.setVisibility("visible");
+    await settle();
+    expect(media.state.camOn).toBe(true);
+    expect(ft(media.state.video)!.readyState).toBe("live");
+  });
+
+  it("tapping camera on while capture is silenced re-acquires (old track stopped first)", async () => {
+    const { media, devices, trackEvents } = setup();
+    await media.acquire();
+    const cam = ft(media.state.video)!;
+    cam.setMuted(true);
+    await media.setCam(true);
+    expect(cam.readyState).toBe("ended");
+    expect(devices.overlaps).toEqual([]);
+    expect(media.state.video).not.toBe(cam);
+    expect(media.state.camOn).toBe(true);
+    expect(trackEvents.at(-1)).toEqual(["video", ft(media.state.video)]);
+  });
+
+  it("camera turned off while silenced stays off when the old track unmutes", async () => {
+    const { media } = setup();
+    await media.acquire();
+    const cam = ft(media.state.video)!;
+    cam.setMuted(true);
+    await media.setCam(false);
+    cam.setMuted(false);
+    expect(media.state.camOn).toBe(false);
+  });
+
   it("devicechange refreshes canSwitchCamera", async () => {
     const { media, devices } = setup();
     await media.acquire();

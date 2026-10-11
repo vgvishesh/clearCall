@@ -38,6 +38,8 @@ Rule of thumb: **whoever learned about the other from `welcome.peers` offers**. 
 
 ## 3. Leave
 `leave` (+ ctl `bye` best-effort; on `pagehide` the client sends both) → S broadcasts `peer-left{reason:"left"}` → everyone closes that pair and removes the participant.
+- On `pagehide` the client writes `leave` to the socket **first and synchronously** (no await, nothing queued before it), then the ctl `bye`s. Nothing after the handler returns is guaranteed to run.
+- Firefox closes the page's WebSocket (code 1001) on navigation **before** `pagehide` fires, so `leave` cannot be sent there; the ctl `bye` still reaches every peer with an open channel, but S keeps the old peerId away for the grace window (§5).
 
 ## 4. Signaling drop + resume (same tab)
 - peerId lives **in memory only** (never storage). Socket closes → S marks the peer away (`awayUntil = now + RESUME_GRACE_SECONDS`), still counted toward capacity, still listed in `welcome.peers` for newcomers.
@@ -48,10 +50,14 @@ Rule of thumb: **whoever learned about the other from `welcome.peers` offers**. 
 - Media keeps flowing P2P while signaling is down; ICE restarts wait until signaling is back.
 - Before the first `welcome` the client gives up after ~20 s (UI error `signaling-unavailable`). Once joined it keeps reconnecting (backoff capped at ~30 s, phase `reconnecting`) as long as any pair is connected, and ends the call (`signaling-unavailable`) only after 60 s with neither signaling nor a connected pair.
 - Signals to a peer that is away or unknown get `error{code:"unknown-peer", peerId}` (non-fatal): drop queued work for that pair; it will be rebuilt on its `hello`.
-- S detects silently dead sockets via `getWebSocketAutoResponseTimestamp` (> 4 × HEARTBEAT_INTERVAL_MS ⇒ away; 2× proved too tight under load).
+- **Hidden until heard.** A peer listed in a `welcome.peers` that we have never received a signal from is not shown (not in `CallState.participants`, not counted by the bandwidth policy) while our `hello` probes it: an active peer says hello on its own `peer-joined` and answers within a round trip. If S answers `unknown-peer` (and we hold no connected pair with it) it stays **hidden but kept in the roster** — it is away, typically our own peerId from before a reload whose `leave` was lost (§5). It becomes visible on **any** signal from it (a resuming peer sends `hello` to everyone it has no pair with) or on `peer-joined`, and is dropped for good on `peer-left`. A probed peer that neither signals nor draws `unknown-peer` within 2 s is shown anyway. While the first welcome's peers are being probed the client stays in phase `joining`, so the call screen never flashes a ghost tile or an empty room.
+- S detects silently dead sockets via `getWebSocketAutoResponseTimestamp` (> 4 × HEARTBEAT_INTERVAL_MS ⇒ away; 2× proved too tight under load). The client pings every HEARTBEAT_INTERVAL_MS and treats its socket as dead after 3 × HEARTBEAT_INTERVAL_MS (45 s, `HEARTBEAT_DEAD_AFTER_MS`) without any message *and* ≥ 2 unanswered pings, then resumes — before the server's cutoff, so a half-open socket usually recovers with no presence change.
 
 ## 5. Reload = new participant
-A reload is a fresh join with a new peerId. The old peerId times out after the grace window (or leaves immediately if `pagehide` delivered `leave`). Others see the old tile disappear within ≤ 20 s and a new tile appear.
+A reload is a fresh join with a new peerId. The old peerId times out after the grace window (or leaves immediately if `pagehide` delivered `leave`). Others see the old tile disappear within ≤ 20 s (at once when the ctl `bye` arrived) and a new tile appear.
+The reloaded tab may find its own old peerId in `welcome.peers` (it was away, §3): it never shows it — the hidden-until-heard rule (§4) keeps it out of the participants until its `peer-left{timeout}`.
+
+> Decision (2026-10-11): the server does **not** treat close code 1001 ("going away") as a leave. Firefox sends 1001 on reload (its `leave` never goes out), but mobile browsers may also close with 1001 when the app is backgrounded while P2P media continues — e.g. switching to WhatsApp to share the link. Ghosts are handled client-side instead (ctl `bye` + hidden-until-heard).
 
 ## 6. Network change / ICE restart
 - Only the **impolite** side (larger peerId) initiates: on `connectionState=failed`, or `disconnected` for > 4 s → `pc.setConfiguration({...,iceServers: latest welcome.iceServers})` → `restartIce()` → offer. The polite side initiates only if nothing happened within a further 4 s.

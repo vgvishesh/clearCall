@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fatalToError } from "./controller.ts";
 import { advanceAndSettle, settle } from "./testing/fake-clock.ts";
-import { asFake } from "./testing/fake-webrtc.ts";
+import { asFake, FakeDataChannel, type FakeTrack } from "./testing/fake-webrtc.ts";
 import {
   createParticipant,
   createWorld,
@@ -277,6 +277,99 @@ describe("controller phases", () => {
     expect(a.c.state.value.participants).toEqual([]);
     const leaves = w.server.received.filter((r) => typeof r.msg !== "string" && r.msg.t === "leave");
     expect(leaves).toHaveLength(1);
+  });
+
+  it("pagehide writes `leave` to the socket synchronously, before any ctl bye", async () => {
+    const w = createWorld();
+    const a = await startCall(w);
+    const order: string[] = [];
+    const Base = w.server.WebSocket as unknown as new (url: string) => { send(d: string): void };
+    const Spy = class extends Base {
+      override send(d: string) {
+        order.push(`ws:${d}`);
+        super.send(d);
+      }
+    };
+    const b = createParticipant(w, { WebSocket: Spy as unknown as typeof w.server.WebSocket });
+    await b.c.prepare({ link: a.c.state.value.link! });
+    await settle();
+    await b.c.join("Bob");
+    await settle(60);
+    expectConnected([a, b]);
+    const origSend = FakeDataChannel.prototype.send;
+    const spy = vi.spyOn(FakeDataChannel.prototype, "send").mockImplementation(function (
+      this: FakeDataChannel,
+      d,
+    ) {
+      order.push(`dc:${d}`);
+      origSend.call(this, d);
+    });
+    order.length = 0;
+    b.win.fire("pagehide");
+    const sync = [...order]; // nothing may wait for a microtask: the document is going away
+    spy.mockRestore();
+    expect(sync[0]).toBe('ws:{"t":"leave"}');
+    expect(sync.slice(1).some((x) => x.startsWith("dc:") && x.includes("bye"))).toBe(true);
+    await settle(20);
+    expect(a.c.state.value.participants).toEqual([]);
+  });
+
+  it("reload whose `leave` was lost: the reloaded tab never lists its own away ghost; it drops on peer-left", async () => {
+    const w = createWorld();
+    const a = await startCall(w);
+    const link = a.c.state.value.link!;
+    const b = await joinCall(w, link, "Bob");
+    const oldB = b.c.peerId!;
+    // Firefox reload: neither `leave` nor `bye` arrive. The old peerId is away server-side for the grace window.
+    w.rtc.env.blocked = true;
+    w.server.dropPeer(oldB);
+    await settle(5);
+    b.c.dispose();
+    w.rtc.env.blocked = false;
+    const b2 = createParticipant(w);
+    const seen: { phase: string; ids: string[] }[] = [];
+    b2.c.state.subscribe((st) => seen.push({ phase: st.phase, ids: st.participants.map((p) => p.id) }));
+    await b2.c.prepare({ link });
+    await settle();
+    await b2.c.join("Bob");
+    await settle(90);
+    // Never listed, not even for the round trip until the server's unknown-peer; no empty in-call flash either.
+    expect(new Set(seen.flatMap((x) => x.ids))).toEqual(new Set([a.c.peerId]));
+    expect(seen.find((x) => x.phase === "in-call")?.ids).toEqual([a.c.peerId]);
+    expect(b2.c.state.value.participants.map((p) => p.id)).toEqual([a.c.peerId]);
+    expect(b2.c.state.value.participants[0]).toMatchObject({ name: "Ann", status: "connected" });
+    await advanceAndSettle(w.clock, 21_000, 1_000);
+    expectConnected([a, b2]);
+  });
+
+  it("joining a room enters in-call with the other participants already listed (no empty flash)", async () => {
+    const w = createWorld();
+    const a = await startCall(w);
+    const b = createParticipant(w);
+    const atInCall: string[][] = [];
+    b.c.state.subscribe((st) => {
+      if (st.phase === "in-call" && !atInCall.length) atInCall.push(st.participants.map((p) => p.id));
+    });
+    await b.c.prepare({ link: a.c.state.value.link! });
+    await settle();
+    await b.c.join("Bob");
+    await settle(60);
+    expect(atInCall).toEqual([[a.c.peerId]]);
+  });
+
+  it("browser-silenced camera: local camOn and the ctl state peers see follow mute/unmute", async () => {
+    const w = createWorld();
+    const a = await startCall(w);
+    const b = await joinCall(w, a.c.state.value.link!, "Bob");
+    const cam = b.c.state.value.local.stream!.getVideoTracks()[0] as unknown as FakeTrack;
+    cam.setMuted(true);
+    await settle(20);
+    expect(b.c.state.value.local.camOn).toBe(false);
+    expect(a.c.state.value.participants[0]!.camOn).toBe(false); // remote shows the camera-off avatar
+    cam.setMuted(false);
+    await settle(20);
+    expect(b.c.state.value.local.camOn).toBe(true);
+    expect(a.c.state.value.participants[0]!.camOn).toBe(true);
   });
 
   it("mesh of 4: everyone connected, every pair 3 m-lines, 600 kbps cap", async () => {

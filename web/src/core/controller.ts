@@ -111,6 +111,8 @@ class Controller implements CallController {
   private everInCall = false;
   private disposed = false;
   private unsubTransport: (() => void) | null = null;
+  /** Welcome received while joining; entering the call once the transport has resolved the roster. */
+  private awaitingRoster = false;
 
   constructor(deps: CoreDeps) {
     this.d = deps;
@@ -368,7 +370,10 @@ class Controller implements CallController {
       log: this.log.scope("peer"),
     });
     this.transport = transport;
-    this.unsubTransport = transport.onChange(() => this.syncParticipants());
+    this.unsubTransport = transport.onChange(() => {
+      this.syncParticipants();
+      if (this.awaitingRoster) this.enterCallWhenResolved();
+    });
     transport.setLocalState(this.announce());
     transport.setHidden(d.document?.visibilityState === "hidden");
 
@@ -393,7 +398,9 @@ class Controller implements CallController {
           if (this.signaling !== signaling) return;
           transport.welcome(info, welcomes++ === 0);
           const phase = this.state.value.phase;
-          if (phase === "joining") this.enterCall();
+          // Stay "joining" until every listed peer is heard from or known to be away, so the call screen never
+          // flashes a ghost tile (our own pre-reload peerId) nor an empty "Waiting for others".
+          if (phase === "joining") this.enterCallWhenResolved();
           else if (phase === "reconnecting") this.setPhase("in-call");
         },
         peerJoined: (id) => transport.peerJoined(id),
@@ -407,6 +414,16 @@ class Controller implements CallController {
     });
     this.signaling = signaling;
     signaling.connect();
+  }
+
+  private enterCallWhenResolved() {
+    const t = this.transport;
+    if (!t || this.state.value.phase !== "joining") {
+      this.awaitingRoster = false;
+      return;
+    }
+    this.awaitingRoster = t.resolving;
+    if (!this.awaitingRoster) this.enterCall();
   }
 
   private enterCall() {
@@ -541,6 +558,7 @@ class Controller implements CallController {
   /** Stop everything call-related (media, transport, signaling, timers). Phase is left to the caller. */
   private teardown(opts: { bye: boolean }) {
     this.generation++;
+    this.awaitingRoster = false;
     batch(() => {
       this.d.clock.clearInterval(this.levelTimer);
       this.levelTimer = undefined;
@@ -603,9 +621,12 @@ class Controller implements CallController {
 
   private onPageHide = () => {
     if (this.inCallish()) {
+      // Signaling `leave` first, synchronously: it is what makes the server broadcast peer-left{left} at once
+      // (else our peerId lingers "away" for the grace window and a reloaded tab sees it in welcome.peers).
+      // The ctl `bye`s over the data channels are a best-effort second path.
       this.L.info("pagehide: leaving");
-      this.transport?.close({ bye: true });
       this.signaling?.leave();
+      this.transport?.close({ bye: true });
     }
     void this.telemetry?.flush(true);
   };

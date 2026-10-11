@@ -7,7 +7,7 @@ import { advanceAndSettle, FakeClock, settle } from "../testing/fake-clock.ts";
 import { FakeSignalingServer } from "../testing/fake-signaling.ts";
 import { asFake, createFakeRtc, FakeMediaStream, FakeTrack } from "../testing/fake-webrtc.ts";
 import { testLog } from "../testing/test-log.ts";
-import { MeshTransport } from "./mesh.ts";
+import { MeshTransport, PROBE_MS } from "./mesh.ts";
 import type { LocalAnnounce } from "./types.ts";
 
 let cipher: SignalCipher;
@@ -88,6 +88,8 @@ function pcFor(p: P, remote: string) {
   const roster = (p.mesh as unknown as { roster: Map<string, { session: { pc: unknown } | null }> }).roster;
   return asFake(roster.get(remote)!.session!.pc);
 }
+
+const rosterIds = (p: P) => [...(p.mesh as unknown as { roster: Map<string, unknown> }).roster.keys()];
 
 function expectFullMesh(peers: P[]) {
   for (const p of peers) {
@@ -399,6 +401,95 @@ describe("MeshTransport", () => {
     expectFullMesh([a, c]);
     expect(pcFor(c, a.id).addTransceiverCalls).toBe(2);
     expect(pcFor(a, c.id).addTransceiverCalls).toBe(0);
+  });
+
+  it("reload without leave: the reloader hides the away ghost from welcome (unknown-peer) until peer-left", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    const b = addPeer(w, "Bob");
+    await settle(60);
+    expectFullMesh([a, b]);
+    // Firefox reload: pagehide's `leave` never reaches the server → old b is "away" for the grace window.
+    b.mesh.close();
+    b.client.close();
+    await settle(10);
+    const b2 = addPeer(w, "Bob");
+    const seen = new Set<string>();
+    b2.mesh.onChange(() => {
+      for (const r of b2.mesh.participants()) seen.add(r.id);
+    });
+    await settle(80);
+    expect(w.server.sentTo(b2.id, "welcome")[0]).toMatchObject({ peers: [a.id, b.id] });
+    expect([...seen]).toEqual([a.id]); // never exposed, not even for a round trip
+    expect(b2.mesh.resolving).toBe(false);
+    // The ghost is hidden once the server said unknown-peer: one participant, connected, named …
+    expect(b2.mesh.participants().map((r) => r.id)).toEqual([a.id]);
+    expect(b2.mesh.participants()[0]).toMatchObject({ status: "connected", name: "Ann" });
+    // … and it does not count toward the bandwidth policy (2 people → 720p tier, not the 3-person 360p one).
+    expect(pcFor(b2, a.id).getTransceivers()[1]!.sender.params.encodings[0]!.maxBitrate).toBe(1_500_000);
+    // Still in the roster (it may resume) until the server says it left.
+    expect(rosterIds(b2)).toEqual([a.id, b.id]);
+    // a learned old b via peer-joined and talked to it: it keeps the tile until the grace expires (FLOWS §5).
+    expect(a.mesh.participants().map((r) => r.id)).toEqual([b.id, b2.id]);
+    await advanceAndSettle(w.clock, 21_000, 1000);
+    expect(rosterIds(b2)).toEqual([a.id]);
+    expectFullMesh([a, b2]);
+  });
+
+  it("a hidden welcome peer becomes visible on its first signal (it resumed) and connects", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    w.server.refuse = true;
+    w.server.dropPeer(a.id, 4006); // a is away (signaling only)
+    await settle(10);
+    w.server.refuse = false;
+    const c = addPeer(w, "Cid");
+    await settle(60);
+    expect(c.mesh.participants()).toEqual([]); // a is listed in welcome but unknown to the server → hidden
+    expect(rosterIds(c)).toEqual([a.id]);
+    const seen: string[][] = [];
+    c.mesh.onChange(() => seen.push(c.mesh.participants().map((r) => r.id)));
+    a.client.nudge(); // a resumes → hello to c (FLOWS §4) → visible again
+    await advanceAndSettle(w.clock, 5_000, 100);
+    expect(seen[0]).toEqual([a.id]);
+    expectFullMesh([a, c]);
+  });
+
+  it("unknown-peer does not hide a welcome peer we already heard from, nor one learned via peer-joined", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    const b = addPeer(w, "Bob");
+    await settle(60);
+    expectFullMesh([a, b]);
+    // b learned a from welcome and heard from it; a learned b via peer-joined.
+    w.rtc.env.blocked = true;
+    pcFor(b, a.id).breakLink("failed");
+    pcFor(a, b.id).breakLink("failed");
+    await settle(10);
+    b.mesh.signalingError("unknown-peer", a.id);
+    a.mesh.signalingError("unknown-peer", b.id);
+    expect(b.mesh.participants().map((r) => r.id)).toEqual([a.id]);
+    expect(a.mesh.participants().map((r) => r.id)).toEqual([b.id]);
+  });
+
+  it("a live welcome peer whose signals are all lost is shown after the probe window", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    w.server.relayFilter = (from) => from !== a.id; // a's hello/answer never reach b
+    const b = addPeer(w, "Bob");
+    await settle(60);
+    expect(b.mesh.participants()).toEqual([]);
+    expect(b.mesh.resolving).toBe(true);
+    await advanceAndSettle(w.clock, PROBE_MS, 100);
+    expect(b.mesh.resolving).toBe(false);
+    expect(b.mesh.participants().map((r) => r.id)).toEqual([a.id]);
+    w.server.relayFilter = null;
+    await advanceAndSettle(w.clock, 21_000, 250); // stalled negotiation recovers (FLOWS §2)
+    expectFullMesh([a, b]);
   });
 
   it("ignores signals from peers not in the roster", async () => {

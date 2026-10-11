@@ -1,8 +1,15 @@
-import { deriveRoomKeys, generatePeerId, generateSecret, type SignalPayload } from "@clearcall/protocol";
+import {
+  deriveRoomKeys,
+  generatePeerId,
+  generateSecret,
+  HEARTBEAT_INTERVAL_MS,
+  type SignalPayload,
+} from "@clearcall/protocol";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createLog } from "./log.ts";
 import {
   backoffDelay,
+  HEARTBEAT_DEAD_AFTER_MS,
   roomCipher,
   roomUrl,
   type SignalCipher,
@@ -267,9 +274,44 @@ describe("SignalingClient", () => {
     await advanceAndSettle(clock, 15_000, 1000);
     expect(server.received.filter((r) => r.msg === "ping")).toHaveLength(1);
     server.answerPings = false;
-    await advanceAndSettle(clock, 50_000, 1000);
+    await advanceAndSettle(clock, HEARTBEAT_DEAD_AFTER_MS + 10_000, 1000);
     expect(a.statuses).toContain("reconnecting");
     expect(a.statuses.at(-1)).toBe("open"); // reconnected (server still accepts)
+  });
+
+  it(`declares the socket dead ${HEARTBEAT_DEAD_AFTER_MS / 1000} s after the last message (± one check), not before`, async () => {
+    const { clock, server } = setup();
+    const a = mk(server, clock);
+    a.client.connect();
+    await settle();
+    await advanceAndSettle(clock, 15_000, 100); // ping → pong: last message at ~15 s
+    expect(server.connections).toBe(1);
+    server.answerPings = false;
+    const lastRx = clock.now();
+    await advanceAndSettle(clock, HEARTBEAT_DEAD_AFTER_MS - 100, 100);
+    expect(a.statuses).not.toContain("reconnecting"); // no false positive before the cutoff
+    let detectedAt: number | null = null;
+    for (let i = 0; i < 200 && detectedAt === null; i++) {
+      await advanceAndSettle(clock, 100, 100);
+      if (a.statuses.includes("reconnecting")) detectedAt = clock.now();
+    }
+    expect(detectedAt! - lastRx).toBeGreaterThan(HEARTBEAT_DEAD_AFTER_MS);
+    expect(detectedAt! - lastRx).toBeLessThanOrEqual(HEARTBEAT_DEAD_AFTER_MS + 5_000);
+    expect(HEARTBEAT_DEAD_AFTER_MS).toBeLessThan(4 * HEARTBEAT_INTERVAL_MS); // resume before the server's cutoff
+  });
+
+  it("two consecutive lost pongs under load do not drop a live socket", async () => {
+    const { clock, server } = setup();
+    const a = mk(server, clock);
+    a.client.connect();
+    await settle();
+    await advanceAndSettle(clock, 15_000, 100);
+    server.answerPings = false; // pongs for the pings at 30 s and 45 s are lost
+    await advanceAndSettle(clock, 30_000 + 100, 100);
+    server.answerPings = true; // the one at 60 s gets through
+    await advanceAndSettle(clock, 30_000, 100);
+    expect(a.statuses).not.toContain("reconnecting");
+    expect(server.connections).toBe(1);
   });
 
   it("discardQueued drops one peer's stale outbox entries; later sends keep order behind the outbox", async () => {

@@ -98,6 +98,8 @@ export interface SignalingOptions {
   /** Give up on the very first join after this long. */
   firstJoinGiveUpMs?: number;
   heartbeatMs?: number;
+  /** No message for this long (with ≥ 2 pings unanswered) ⇒ socket dead. Default HEARTBEAT_DEAD_AFTER_MS. */
+  deadAfterMs?: number;
   /** A socket that hasn't opened after this long is abandoned and retried. */
   connectTimeoutMs?: number;
   outboxLimit?: number;
@@ -119,9 +121,26 @@ export const CLOSE = {
   REPLACED: 4004,
   /** Rate-limit abuse: marked away server-side; resume. */
   RATE_LIMITED: 4005,
-  /** No message/heartbeat for > 30 s: marked away; resume. */
+  /** No message/heartbeat for > 4 × HEARTBEAT_INTERVAL_MS (60 s): marked away; resume. */
   IDLE: 4006,
 } as const;
+
+/**
+ * Client cutoff for a silently dead socket: no message (pong or anything else) for this long, with at least two
+ * pings unanswered in that time → close and resume.
+ *
+ * Rationale — 3 × HEARTBEAT_INTERVAL_MS (45 s):
+ * - It tolerates two consecutive lost/late pongs (GC pause, saturated main thread or uplink, a mobile radio waking
+ *   up) and only the third miss counts; the old 2 × interval + 5 s (35 s) dropped a live socket after two misses.
+ * - It stays below the server's 4 × interval (60 s, `DEAD_AFTER_MS` in signaling/), so in the common case of a
+ *   half-open socket we resume (`join{resume}`) before the server marks us away: peers see no presence change.
+ * - The unanswered-ping condition means a tab whose timers were frozen/throttled (background, laptop sleep) is
+ *   not declared dead on wake-up just because it did not ask; it pings first.
+ * A false positive only costs a resume (pairs survive); detection takes 45–50 s (checked every HEARTBEAT_CHECK_MS).
+ */
+export const HEARTBEAT_DEAD_AFTER_MS = 3 * HEARTBEAT_INTERVAL_MS;
+/** How often liveness is evaluated (pings still go out every HEARTBEAT_INTERVAL_MS). */
+const HEARTBEAT_CHECK_MS = 5_000;
 
 /** Client-internal close reasons (never sent by the server). */
 const LOCAL_CLOSE = { CONNECT_TIMEOUT: 4900, HEARTBEAT_LOST: 4901, INJECTED: 4999 } as const;
@@ -159,6 +178,9 @@ export class SignalingClient {
   private connectTimer: TimerHandle | undefined;
   private heartbeatTimer: TimerHandle | undefined;
   private lastRx = 0;
+  private lastPingAt = 0;
+  /** Pings sent since the last message received on the current socket. */
+  private pingsUnanswered = 0;
   private sendTail: Promise<void> = Promise.resolve();
   private decryptTails = new Map<string, Promise<void>>();
   private outbox: { to: string; raw: string }[] = [];
@@ -178,6 +200,7 @@ export class SignalingClient {
       aliveCheckMs: 1000,
       firstJoinGiveUpMs: 20_000,
       heartbeatMs: HEARTBEAT_INTERVAL_MS,
+      deadAfterMs: HEARTBEAT_DEAD_AFTER_MS,
       connectTimeoutMs: 10_000,
       outboxLimit: 500,
       random: Math.random,
@@ -320,6 +343,7 @@ export class SignalingClient {
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
       this.lastRx = clock.now();
+      this.pingsUnanswered = 0;
       this.onMessage(ev.data);
     };
     ws.onclose = (ev) => this.handleClose(ws, ev);
@@ -331,17 +355,24 @@ export class SignalingClient {
   private startHeartbeat(ws: WebSocketLike) {
     const { clock } = this.o;
     clock.clearInterval(this.heartbeatTimer);
+    this.pingsUnanswered = 0;
+    this.lastPingAt = clock.now();
+    const checkMs = Math.min(HEARTBEAT_CHECK_MS, this.o.heartbeatMs);
     this.heartbeatTimer = clock.setInterval(() => {
       if (this.ws !== ws) return;
-      if (clock.now() - this.lastRx > 2 * this.o.heartbeatMs + 5_000) {
-        this.o.log.warn("heartbeat lost");
+      const now = clock.now();
+      if (now - this.lastRx > this.o.deadAfterMs && this.pingsUnanswered >= 2) {
+        this.o.log.warn("heartbeat lost", { silentMs: now - this.lastRx, unanswered: this.pingsUnanswered });
         this.handleClose(ws, { code: LOCAL_CLOSE.HEARTBEAT_LOST, reason: "heartbeat" });
         return;
       }
+      if (now - this.lastPingAt < this.o.heartbeatMs) return;
+      this.lastPingAt = now;
+      this.pingsUnanswered++;
       try {
         ws.send(HEARTBEAT_REQUEST);
       } catch {}
-    }, this.o.heartbeatMs);
+    }, checkMs);
   }
 
   private onMessage(data: unknown) {

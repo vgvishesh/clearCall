@@ -10,7 +10,7 @@
  * negotiated (PeerSession decides).
  */
 import type { ErrorCode, PeerMessage, SignalPayload } from "@clearcall/protocol";
-import type { Clock } from "../clock.ts";
+import type { Clock, TimerHandle } from "../clock.ts";
 import type { CodecLike, CodecPrefs } from "../codecs.ts";
 import { errInfo, type Logger, nullLogger, short } from "../log.ts";
 import { type LocalTracks, type PeerRole, PeerSession } from "../peer-session.ts";
@@ -22,6 +22,13 @@ import type { QaPeerStats } from "../types.ts";
 import type { LocalAnnounce, MediaTransport, RemoteInfo } from "./types.ts";
 
 type Learned = "welcome" | "peer-joined";
+type Hidden = null | "probing" | "away";
+
+/**
+ * How long a never-heard welcome peer stays hidden while we wait for `unknown-peer` (ghost) or any signal (alive).
+ * Both arrive within one signaling round trip, so this only bounds the wait for a live peer whose hello is lost.
+ */
+export const PROBE_MS = 2_000;
 
 interface Entry {
   id: string;
@@ -29,6 +36,20 @@ interface Entry {
   queue: SerialQueue;
   session: PeerSession | null;
   info: RemoteInfo;
+  /** Listed in a `welcome.peers` (first or resumed). */
+  fromWelcome: boolean;
+  /** Any signal (hello/sdp/ice) has arrived from this peer since we learned it. */
+  heard: boolean;
+  /**
+   * Hidden-until-heard (FLOWS §4/§5). A welcome-listed peer we never heard from is not shown yet:
+   * - "probing": just learned; our hello is in flight. An active peer answers within a signaling round trip (and
+   *   says hello on its own `peer-joined`); after PROBE_MS without `unknown-peer` it is shown anyway.
+   * - "away": the server answered `unknown-peer` — typically our own previous peerId after a reload whose `leave`
+   *   was lost. Kept in the roster (it may resume) but left out of `participants()` and the policy count.
+   * Any signal from it shows it; `peer-left` drops it.
+   */
+  hidden: Hidden;
+  probeTimer?: TimerHandle;
   /** Last view height we sent this peer (undefined = never). */
   viewSent?: number;
   /** Latest rendered tile height the UI reported for this peer. */
@@ -88,7 +109,7 @@ export class MeshTransport implements MediaTransport {
         this.log.warn("resume window expired: rebuilding all pairs", { n: this.roster.size });
         for (const id of [...this.roster.keys()]) this.drop(id);
       }
-      for (const id of info.peers) this.learn(id, "welcome");
+      for (const id of info.peers) this.learn(id, "welcome", true);
       this.changed();
       return;
     }
@@ -99,7 +120,7 @@ export class MeshTransport implements MediaTransport {
       const e = this.roster.get(id);
       // Unknown here = it joined while we were away (we missed its peer-joined): it learned us from its
       // welcome.peers, so it is the offerer and we answer (FLOWS §2). Our hello makes it (re)offer.
-      if (!e) this.learn(id, "peer-joined");
+      if (!e) this.learn(id, "peer-joined", true);
       else if (!e.session?.healthy) {
         // Not connected and not connecting with a completed negotiation (e.g. an offer lost in the drop):
         // rebuild via hello, keeping the role both sides agree on (FLOWS §2/§4).
@@ -121,7 +142,10 @@ export class MeshTransport implements MediaTransport {
     if (existing) {
       // Fresh join with an id we hold (grace expired on their side): rebuild as answerer.
       existing.learned = "peer-joined";
+      existing.fromWelcome = false;
+      this.show(existing, "peer-joined"); // the server says it is active
       this.rebuild(existing, true);
+      this.changed();
       return;
     }
     this.learn(id, "peer-joined");
@@ -143,6 +167,8 @@ export class MeshTransport implements MediaTransport {
       this.log.debug("signal from unknown peer ignored", { peer: short(from), kind: payload.k });
       return;
     }
+    e.heard = true;
+    this.show(e, payload.k);
     void e.queue.push(async () => {
       if (this.roster.get(from) !== e) return;
       if (payload.k === "hello") {
@@ -166,6 +192,15 @@ export class MeshTransport implements MediaTransport {
     if (!e) return;
     // The peer is away/unknown to the server: drop queued work; keep a live media path, else wait for its hello.
     e.queue.clear();
+    if (e.fromWelcome && !e.heard && e.hidden !== "away" && !e.session?.connected) {
+      // Never heard from and unknown to the server: most likely our own ghost from before a reload. Hide it
+      // until it signals (a resuming peer hellos everyone it has no pair with) or the server says it left.
+      this.log.info("unknown-peer from a never-heard welcome peer: hiding it", { peer: short(peerId) });
+      this.o.clock.clearTimeout(e.probeTimer);
+      e.hidden = "away";
+      this.updateParticipantCount();
+      this.changed(); // visibility or `resolving` changed
+    }
     if (e.session && !e.session.connected) {
       this.log.info("unknown-peer: dropping unconnected pair until hello", { peer: short(peerId) });
       e.session.close();
@@ -220,12 +255,18 @@ export class MeshTransport implements MediaTransport {
   // ── remote ──
 
   participants(): RemoteInfo[] {
-    return [...this.roster.values()].map((e) => e.info);
+    return [...this.roster.values()].filter((e) => !e.hidden).map((e) => e.info);
+  }
+
+  /** True while a peer from the first welcome is still being probed (see `Entry.hidden`). */
+  get resolving(): boolean {
+    for (const e of this.roster.values()) if (e.hidden === "probing") return true;
+    return false;
   }
 
   audioLevels(): Map<string, number> {
     const m = new Map<string, number>();
-    for (const e of this.roster.values()) m.set(e.id, e.session?.audioLevel() ?? 0);
+    for (const e of this.roster.values()) if (!e.hidden) m.set(e.id, e.session?.audioLevel() ?? 0);
     return m;
   }
 
@@ -299,7 +340,7 @@ export class MeshTransport implements MediaTransport {
     return [...this.roster.values()];
   }
 
-  private learn(id: string, learned: Learned) {
+  private learn(id: string, learned: Learned, fromWelcome = false) {
     if (id === this.o.selfId || this.roster.has(id)) return;
     const e: Entry = {
       id,
@@ -308,6 +349,9 @@ export class MeshTransport implements MediaTransport {
         this.log.warn("signal task failed", { peer: short(id), ...errInfo(err) }),
       ),
       session: null,
+      fromWelcome,
+      heard: false,
+      hidden: fromWelcome ? "probing" : null,
       statsPrev: new Map(),
       info: {
         id,
@@ -321,7 +365,15 @@ export class MeshTransport implements MediaTransport {
       },
     };
     this.roster.set(id, e);
-    this.log.info("peer learned", { peer: short(id), from: learned });
+    this.log.info("peer learned", {
+      peer: short(id),
+      from: learned,
+      ...(fromWelcome ? { welcome: true } : {}),
+    });
+    if (fromWelcome)
+      e.probeTimer = this.o.clock.setTimeout(() => {
+        if (this.roster.get(id) === e && e.hidden === "probing") this.show(e, "probe-timeout");
+      }, PROBE_MS);
     this.sayHello(id);
     this.createSession(e);
     this.updateParticipantCount();
@@ -384,7 +436,7 @@ export class MeshTransport implements MediaTransport {
       },
     });
     e.session = session;
-    session.setParticipants(this.roster.size + 1);
+    session.setParticipants(this.participantCount());
     this.update(e, { status: "connecting", stream: null });
   }
 
@@ -421,14 +473,31 @@ export class MeshTransport implements MediaTransport {
     const e = this.roster.get(id);
     if (!e) return;
     e.queue.clear();
+    this.o.clock.clearTimeout(e.probeTimer);
     e.session?.close();
     e.session = null;
     this.roster.delete(id);
     this.updateParticipantCount();
   }
 
+  /** Us + every remote that is not a hidden away ghost (those don't cost us bandwidth tiers). */
+  private participantCount(): number {
+    let n = 1;
+    for (const e of this.roster.values()) if (e.hidden !== "away") n++;
+    return n;
+  }
+
+  private show(e: Entry, why: string) {
+    if (e.hidden === null) return;
+    this.o.clock.clearTimeout(e.probeTimer);
+    if (e.hidden === "away") this.log.info("hidden peer is back: showing it", { peer: short(e.id), why });
+    e.hidden = null;
+    this.updateParticipantCount();
+    this.changed();
+  }
+
   private updateParticipantCount() {
-    const n = this.roster.size + 1;
+    const n = this.participantCount();
     for (const e of this.roster.values()) e.session?.setParticipants(n);
   }
 
