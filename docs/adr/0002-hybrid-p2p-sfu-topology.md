@@ -1,6 +1,6 @@
 # 0002 — Hybrid topology: P2P mesh ≤3, serverless SFU for 4–10
 
-- Status: Proposed
+- Status: Deferred (V1 is web-only, see 0003)
 - Date: 2026-10-11
 
 ## Context

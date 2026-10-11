@@ -1,29 +1,33 @@
 ---
 name: webrtc-media
-description: Domain reference for libwebrtc media tuning on iOS/Android — Opus settings, video codecs, simulcast/SVC, bandwidth estimation, SDP, getStats fields, audio processing and E2EE. Use when writing or reviewing any code in Media/ or media/.
+description: Browser WebRTC reference for Clearcall's engine — perfect negotiation, ICE restart, data channels, Opus/RED/DTX settings, codec preferences, RTCRtpSender.setParameters bitrate control, mesh bandwidth policy, getStats fields, and cross-browser (Safari/Chrome/Firefox) differences. Use when writing or reviewing web/src/core.
 ---
-# WebRTC media reference
-Always verify a tuning claim in the quality lab; these are starting points, not truths.
+# WebRTC in the browser — Clearcall reference
+Verify tuning claims in the quality lab; these are starting points.
 
-## Audio (Opus)
-- Voice mode fmtp: `useinbandfec=1; usedtx=1; maxaveragebitrate=32000; stereo=0`. Enable RED (`red/48000/2`, negotiated before opus) for lossy links — costs ~2× audio bitrate, worth it under 3–10% loss.
-- Music mode: `maxaveragebitrate=96000–128000; stereo=1; sprop-stereo=1; usedtx=0`; disable NS, AGC, high-pass filter; keep AEC unless headphones are routed (check route). `ptime=20`.
-- Noise suppression candidates: WebRTC NS (baseline), RNNoise (~small CPU), DeepFilterNet (best quality, check battery). Implement as an audio processing module hook so it's swappable and A/B-able in the lab.
-- Opus 1.5 DRED / deep PLC may not be in the prebuilt SDK — needs a custom libwebrtc build; only pursue if the lab shows loss-recovery is the bottleneck.
+## Negotiation
+- W3C **perfect negotiation**: `makingOffer`, `ignoreOffer`, `isSettingRemoteAnswerPending`; polite = smaller peerId. Use `setLocalDescription()` with no args. Rollback is implicit in modern browsers.
+- Add transceivers explicitly (`addTransceiver(track, {direction:"sendrecv", streams:[stream]})`) so codec preferences and `sendEncodings` can be set at creation.
+- `negotiationneeded` → offer. Queue remote ICE candidates until `remoteDescription` is set.
+- ICE restart: on `connectionState === "failed"` call `pc.restartIce()` (the polite/impolite logic still holds); on `disconnected` wait ~4 s then restart. Back off; give up after 3 tries → mark peer `failed` in UI with "Reconnect" action.
+- Data channel `ctl`: `negotiated: true, id: 0` on both sides (no extra negotiation), ordered.
+
+## Audio
+- Capture (voice): `{echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1}`. Music: NS/AGC false, EC true. Switch by acquiring a new track + `sender.replaceTrack()`.
+- Opus fmtp munge on local SDP (both offer/answer): `useinbandfec=1;usedtx=1;maxaveragebitrate=128000` (append/replace in the `a=fmtp:<opus pt>` line). Bitrate per mode via `setParameters({encodings:[{maxBitrate}]})`.
+- RED: if `RTCRtpReceiver.getCapabilities('audio').codecs` includes `audio/red`, `setCodecPreferences([red, opus, ...rest])`. Measure in lab.
 
 ## Video
-- Codec preference set by capability probe at startup, persisted per device model. Candidates: AV1 (SW encode ≤360p is viable, best at low rates), VP9 (SVC L3T3 for SFU), H.264 HW (best battery; use High profile where supported).
-- 1:1: single layer, `degradationPreference = balanced` (maintain-framerate for motion, maintain-resolution for screen share).
-- SFU: simulcast 3 layers (scaleResolutionDownBy 4/2/1) or SVC; receiver requests the layer matching rendered tile size; pause video for off-screen tiles.
-- Cap starting bitrate sensibly (`x-google-start-bitrate`), let GCC ramp. Never set min bitrate high — it kills calls on weak links.
+- Codec choice: `navigator.mediaCapabilities.encodingInfo({type:'webrtc', video:{contentType:'video/VP9', width, height, bitrate, framerate}})` → prefer powerEfficient VP9 → H264 → VP8; reorder `setCodecPreferences`. Safari: H264 HW is the safe default.
+- Per-connection encode caps via `sender.setParameters`: `maxBitrate`, `scaleResolutionDownBy`, `maxFramerate`; always read-modify-write `getParameters()`. `degradationPreference` where supported.
+- Policy table lives in `web/src/core/policy.ts` (ADR-0005), inputs: participant count, receiver's `view` (tile height px × devicePixelRatio), our tab visibility.
 
-## Bandwidth budget levers (req. 6)
-Audio DTX, receiver-side layer selection, top-N audio forwarding in groups, pause hidden video, lower fps before lower resolution for talking heads, codec choice.
+## Stats (getStats) used by UI + tests
+- `inbound-rtp` (kind audio/video): `bytesReceived, packetsLost, jitter, framesDecoded, framesDropped, freezeCount, totalFreezesDuration, concealedSamples, totalSamplesReceived, audioLevel, jitterBufferDelay, jitterBufferEmittedCount`.
+- `outbound-rtp`: `bytesSent, qualityLimitationReason, frameHeight, framesPerSecond, targetBitrate`.
+- `candidate-pair` (selected via `transport.selectedCandidatePairId`): `currentRoundTripTime, availableOutgoingBitrate`; local candidate `candidateType` (`relay` = TURN).
+- Connection quality badge: good if RTT<200ms & loss<2%; fair if RTT<400 & loss<6%; else poor.
 
-## getStats fields the lab and apps export
-outbound-rtp: `bytesSent, framesEncoded, qualityLimitationReason, qualityLimitationDurations, encoderImplementation, targetBitrate`
-inbound-rtp: `jitter, packetsLost, framesDropped, freezeCount, totalFreezesDuration, concealedSamples, concealmentEvents, jitterBufferDelay/jitterBufferEmittedCount, pliCount, nackCount`
-candidate-pair (selected): `currentRoundTripTime, availableOutgoingBitrate`; local candidate type (`relay` = TURN in use).
-
-## E2EE (SFU path)
-`RTCFrameEncryptor`/`FrameEncryptorInterface` per sender, decryptor per receiver; AES-GCM with per-sender keys, key epoch rotated on membership change; keys distributed via signaling encrypted to each participant's identity key. Leave codec headers unencrypted where the SFU needs them for layer switching.
+## Cross-browser notes
+- Safari: no `RTCRtpSender.setStreams` gaps, but `setCodecPreferences` exists since 16; `audioLevel` present; `getStats` field coverage smaller (no `freezeCount` on older versions) — treat missing fields as undefined, never crash.
+- Firefox: `setParameters` requires encodings length unchanged; `mediaCapabilities` webrtc type may be unsupported → fall back to default codec order.

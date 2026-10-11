@@ -36,11 +36,22 @@ expect "add XCTSkip"                ask   guard_paths.sh "$(f ios/T.swift 'throw
 expect "add @Ignore"                ask   guard_paths.sh "$(f android/T.kt '@Ignore fun t(){}')"
 expect "normal kotlin"              allow guard_paths.sh "$(f android/A.kt 'fun a() = 1')"
 
+echo "commit policy"
+repo=$(mktemp -d); git -C "$repo" init -q -b main; git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+cj() { jq -n --arg c "$1" --arg d "$repo" '{cwd:$d,tool_input:{command:$c}}'; }
+expect "commit on main"             deny  guard_bash.sh "$(cj 'git commit -m x')"
+expect "commit on main via -C"      deny  guard_bash.sh "$(jq -n --arg c "git -C $repo commit -m x" '{cwd:"/",tool_input:{command:$c}}')"
+expect "add && commit on main"      deny  guard_bash.sh "$(cj 'git add -A && git commit -m x')"
+git -C "$repo" switch -q -c feat/x
+expect "commit on feature branch"   allow guard_bash.sh "$(cj 'git commit -m x')"
+expect "merge into main"            allow guard_bash.sh "$(cj 'git switch main && git merge --no-ff feat/x')"
+rm -rf "$repo"
+
 echo "post_edit / stop_verify"
 sid="selftest-$$"; mkdir -p protocol; tmp=protocol/.selftest.json; echo '{}' > "$tmp"
 ctx=$(jq -n --arg p "$P/$tmp" --arg s "$sid" '{session_id:$s,tool_input:{file_path:$p}}' | "$H/post_edit.sh" | jq -r '.hookSpecificOutput.additionalContext // ""')
 [[ "$ctx" == *protocol-change* ]] && echo "  ✓ protocol edit injects protocol-change reminder" || { echo "  ✗ protocol reminder missing"; fails=$((fails+1)); }
-grep -qx "$tmp" ".claude/state/changed-$sid.txt" && echo "  ✓ change recorded for Stop gate" || { echo "  ✗ change not recorded"; fails=$((fails+1)); }
+grep -qx "$P|$tmp" ".claude/state/changed-$sid.txt" && echo "  ✓ change recorded for Stop gate" || { echo "  ✗ change not recorded"; fails=$((fails+1)); }
 jq -n --arg s "$sid" '{session_id:$s}' | "$H/stop_verify.sh" >/dev/null; [[ ! -e ".claude/state/changed-$sid.txt" ]] && echo "  ✓ stop gate passes + clears when verify green" || { echo "  ✗ stop gate"; fails=$((fails+1)); }
 rm -f "$tmp" ".claude/state/changed-$sid.txt" ".claude/state/stopblocks-$sid"
 

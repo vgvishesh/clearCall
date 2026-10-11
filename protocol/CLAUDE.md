@@ -1,3 +1,2 @@
-# protocol/ — the signaling contract
-`signaling.schema.json` (JSON Schema 2020-12) + `fixtures/*.json` + `VERSION` + `FLOWS.md`.
-Any change: `protocol-change` skill. All three implementations must round-trip every fixture (`make protocol-check`).
+# protocol/ — the contract (`@clearcall/protocol`)
+`src/messages.ts` = all message types + validators (zero dependencies, used by worker and web). `fixtures/` = valid/invalid examples. `FLOWS.md` = sequences. Any change: `protocol-change` skill.

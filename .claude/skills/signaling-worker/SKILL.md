@@ -1,14 +1,15 @@
 ---
 name: signaling-worker
-description: Develop, test and deploy the Cloudflare Worker + Durable Objects that handle signaling, presence, push relay (APNs VoIP/FCM), TURN/SFU credentials. Use for work under signaling/.
+description: Develop and test the Cloudflare Worker that serves the Clearcall PWA and runs the Room Durable Object (WebSocket hibernation signaling relay, presence, resume, limits, TURN credentials). Use for work under signaling/.
 ---
 # signaling-worker
-Load the global `durable-objects`, `wrangler` and `workers-best-practices` skills for platform details — they retrieve current Cloudflare docs.
+Load the global `durable-objects`, `wrangler` and `workers-best-practices` skills for current Cloudflare APIs.
 
-- Stack: TypeScript, Workers, SQLite-backed Durable Objects (free plan), WebSocket **Hibernation API** (`ctx.acceptWebSocket`) so idle connections cost nothing. Vitest with `@cloudflare/vitest-pool-workers`. Biome for lint/format.
-- `UserDO` (per identity public key): presence socket, mailbox for offline signaling, push tokens. `CallDO` (per call): roster, topology (mesh↔SFU), E2EE key epoch, timeouts.
-- Auth: every request signed by the device key (Ed25519 over a server nonce). No passwords, no sessions to store.
-- Secrets (`APNS_KEY`, `FCM_SA`, `REALTIME_APP_SECRET`, `TURN_KEY`) via `wrangler secret put` — owner runs it; locally via `.dev.vars` (agent cannot read it).
-- Store the minimum: public keys, discovery hashes, push tokens. No call metadata beyond what an active call needs; TTL everything.
-- `make signaling-dev` (local, `wrangler dev`), `make signaling-test`. Deploy only staging yourself: `make signaling-deploy-staging`. Production deploy asks the owner (hook-enforced).
-- Free-plan budget awareness: DO requests/duration and Worker requests are capped daily — keep presence heartbeats in WebSocket auto-response (`setWebSocketAutoResponse`) so pings don't wake the DO.
+- `wrangler.jsonc`: `assets.directory = "../web/dist"`, `not_found_handling = "single-page-application"`, `run_worker_first = ["/api/*"]`; DO binding `ROOM` → class `Room` with a `new_sqlite_classes` migration (free plan); envs `staging`, `production`.
+- Routes: `GET /api/health` → 200 `{ok:true}`; `GET /api/room/:roomId` with `Upgrade: websocket` → `env.ROOM.getByName(roomId)`; anything else under `/api` → 404. Validate `roomId` format before touching a DO.
+- Room DO: `ctx.acceptWebSocket(ws)` (hibernation), per-socket state in `ws.serializeAttachment({peerId, joinedAt, away?})`, `ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping","pong"))`. On close: mark away + `ctx.storage.setAlarm(now+20s)`; `alarm()` broadcasts `peer-left` for expired peers. `resume` with the same peerId re-binds without leave/join broadcasts.
+- Enforce: max 10 peers, 64 KiB messages, simple token-bucket rate limit per socket, validate every message with `@clearcall/protocol`; never parse or log `data` blobs.
+- TURN: if `TURN_KEY_ID` + `TURN_KEY_API_TOKEN` secrets exist, mint credentials from Cloudflare Realtime TURN (short TTL) and include them in `welcome.iceServers`; otherwise STUN only (`stun:stun.cloudflare.com:3478`). Cache minted creds in the DO for a few minutes.
+- Security headers for HTML via `web/public/_headers` (CSP, Permissions-Policy camera/microphone=self, Referrer-Policy no-referrer).
+- Tests: Vitest + `@cloudflare/vitest-pool-workers` (real DO, real WebSockets): join/welcome, relay to the right peer only, room full, resume, away→alarm→peer-left, invalid messages, size/rate limits.
+- `make dev` runs it locally. Deploy: staging only (`make deploy-staging`), production asks the owner.

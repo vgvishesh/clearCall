@@ -1,34 +1,31 @@
 ---
 name: implement
-description: Build a feature end-to-end across iOS, Android, signaling and protocol using Planner → Evaluator → Executor → Validator. Use for any user-facing feature or any change spanning more than one area of the repo.
+description: Build a feature end-to-end (protocol → worker → web core → UI → E2E) using Planner → Evaluator → Executor(s) → Validator, with feature branches, frequent commits and parallel worktree agents. Use for any user-facing feature or change spanning more than one area.
 ---
-# implement — Planner → Evaluator → Executor → Validator
+# implement — Planner → Evaluator → Executor(s) → Validator
 
-Input: a feature request. Output: the feature working on both platforms, verified, with `docs/PLAN.md` updated.
+## 0. Branch
+From an up-to-date `main`: `git switch -c feat/<slug>`. Commit after every logical step (plan file, contract change, each module + its tests). Never commit on `main` (hook-enforced).
 
-## 1. Plan (you, or the Plan agent for large features)
+## 1. Plan
 Read `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/PLAN.md`, relevant ADRs. Write `docs/plans/<slug>.md`:
-- **Goal** and which CLAUDE.md requirement(s) it serves.
-- **Contract first:** protocol messages added/changed (with fixture names), Worker endpoints/DO changes.
-- **Per-platform tasks:** iOS, Android, signaling, quality — each with files to touch and unit tests to add.
-- **Acceptance criteria** written as checks a validator can run: `make` targets, Maestro flow names, screenshots to capture, quality profiles + metrics that must hold.
-- **Risks** (audio session, background/CallKit/Telecom, permissions, battery, bandwidth).
-For a decision that is expensive to reverse, also write an ADR (`adr` skill).
+- Goal + which V1 requirement it serves.
+- **Contract changes first:** `protocol/` messages (with fixtures) and/or `web/src/core/types.ts` (CallController).
+- **Work packages** that can run in parallel, each with: owner agent, *exact paths it may touch* (disjoint between packages), tasks, unit tests.
+- **Acceptance criteria** a validator can run: make targets, Playwright spec names, screenshots, quality profiles + metrics.
+- Risks (Safari/iOS quirks, permissions, autoplay, background, bandwidth).
+Commit the plan.
 
-## 2. Evaluate (spawn `plan-evaluator` agent)
-Pass it the plan path. It returns BLOCKERS / CONCERNS. Fix every blocker in the plan; address or explicitly accept concerns. Max 2 rounds; if blockers remain, stop and ask the owner.
+## 2. Evaluate
+Spawn `plan-evaluator` with the plan path. Fix blockers (max 2 rounds; then ask the owner). Commit.
 
-## 3. Execute
-Order: `protocol/` → `signaling/` → clients. Once the contract is in, spawn `ios-engineer` and `android-engineer` **in parallel** (one message, two Agent calls), each given: plan path, its task list, acceptance criteria. Media/codec/audio work goes to `media-engineer`. Worker work to `signaling-engineer`.
-Each executor must finish with its own area's `make verify` green and report: files changed, tests added, anything it could not do.
+## 3. Execute — parallel by default
+1. Land contract changes yourself on the feature branch and commit (so every worker starts from the same contract).
+2. Spawn one agent per work package **in a single message** with `isolation: "worktree"` and `run_in_background: true`. Each prompt includes: plan path, its package, allowed paths, base branch to start from (`git switch -c <pkg-branch> <feature-branch>` inside the worktree), "commit after each logical step", "finish with `make verify` green for your areas", "report branch name + commits + what's not done".
+3. As each finishes: `git merge --no-ff <pkg-branch>` into the feature branch, run `make verify`, resolve conflicts (they should be rare if paths were disjoint). Delete merged package branches and worktrees.
 
-## 4. Validate (spawn `validator` agent)
-It runs, in order, and reports pass/fail with evidence:
-1. `make verify AREAS="<touched areas>"` and `make protocol-check` if the contract changed
-2. `make ios-run` + `make android-run`, deep link to the feature, `make screenshots NAME=<slug>`, then reads both PNGs and compares them with each other and the acceptance criteria (parity, layout, dark mode, truncation)
-3. `make e2e FLOW=quality/e2e/<slug>.yaml` when a flow exists (write one for every user-facing flow)
-4. `make quality PROFILE=...` for any media-affecting change, compared to the last report on `main`
-Anything failing → back to step 3 with the validator's findings. Loop at most 3 times, then report to the owner.
+## 4. Validate
+Spawn `validator` with plan path + touched areas. It runs verify, `make e2e`, `make screenshots` (and reads the images), quality profiles for media changes, and returns PASS/FAIL per criterion. Failures → back to 3 (max 3 loops, then report to owner).
 
 ## 5. Close
-Update `docs/PLAN.md` (status + Log line), tick acceptance criteria in the plan file, summarize to the owner: what shipped, evidence (screenshot paths, report paths), what's left.
+Update `docs/PLAN.md` (status + Log), tick criteria in the plan, commit, then `git switch main && git merge --no-ff feat/<slug> && git branch -d feat/<slug>`. Summarize to the owner: what shipped, evidence paths, what's left.

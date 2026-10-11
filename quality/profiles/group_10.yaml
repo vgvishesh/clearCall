@@ -1,5 +1,5 @@
 link: { up_kbps: 3000, down_kbps: 10000, delay_ms: 50, jitter_ms: 15, loss_pct: 1 }
-topology: app+9bots
+topology: mesh
 participants: 10
 duration_s: 120
 corpus: [speech_noisy, talking_head]

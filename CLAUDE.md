@@ -1,59 +1,57 @@
-# betterApp — high-fidelity voice/video calling (iOS + Android)
+# Clearcall — high-fidelity voice/video calls in the browser
 
-Native calling app whose whole reason to exist is **better call quality than WhatsApp at equal or lower bandwidth**.
-Every change is judged by that. If you can't measure that a media change helps, it doesn't ship.
+An installable web app (PWA) for iPhone, Android and desktop whose reason to exist is **better call quality than WhatsApp at equal or lower bandwidth**, with zero servers we operate.
+V1 is **web-only** (ADR-0003). Native apps are parked in `docs/paused-native/`.
 
-## Product requirements (non-negotiable)
-1. Dead-simple UI: open app → see contacts → tap to call. Onboarding in under 30 seconds.
-2. No backend servers we operate. Allowed: free-tier serverless (Cloudflare Workers + Durable Objects, Realtime SFU/TURN).
-3. Group calls of **up to 10 participants**.
-4. Speech is clean (no background noise) **and** music passes through cleanly (music mode).
-5. Works for anyone on a stable connection, including behind CGNAT/symmetric NAT (TURN required).
-6. Minimal bandwidth for the delivered quality — bandwidth budgets are hard test gates.
-7. Fully native: Swift/SwiftUI (iOS), Kotlin/Jetpack Compose (Android).
-8. Quality is tested automatically, locally and remotely.
+## V1 product (what "done" means)
+1. Open app → **Start a call** → share link (WhatsApp etc.) → others tap the link → in the call. No accounts, no contacts.
+2. Peer-to-peer media (full mesh). Up to **10 participants**; full video up to 4, adaptive thumbnails 5–10 (ADR-0005).
+3. Clean speech (noise suppression) by default; **Music mode** for clean music.
+4. Works on iPhone Safari / home-screen app, Android Chrome, desktop Chrome/Safari/Firefox — on any stable connection (STUN, TURN when configured).
+5. Minimal bandwidth for the quality delivered; budgets are test gates.
+6. Server side is one Cloudflare Worker (free tier): serves the app, relays encrypted signaling, mints TURN credentials. It never sees media, names, or room keys (ADR-0004).
+7. Quality is tested automatically: Playwright multi-browser E2E + the media quality lab.
 
-Architecture and the reasoning behind each decision: `docs/ARCHITECTURE.md` and `docs/adr/`.
-Current milestone and status: `docs/PLAN.md` — read it at the start of any non-trivial task, update it when you finish one.
+Design input: dark, calm, minimal; one accent color; big round controls; call UI usable one-handed on a phone. Architecture: `docs/ARCHITECTURE.md`, `docs/adr/`. Status: `docs/PLAN.md` — read at the start of non-trivial work, update when you finish.
 
-## Repo map
-| Path | What | Own CLAUDE.md |
-|---|---|---|
-| `ios/` | Swift/SwiftUI app, XcodeGen `project.yml` (the `.xcodeproj` is generated — never edit it) | yes |
-| `android/` | Kotlin/Compose app, Gradle Kotlin DSL + version catalog | yes |
-| `signaling/` | Cloudflare Worker + Durable Objects: signaling, presence, push relay, SFU/TURN credential minting | yes |
-| `protocol/` | **The contract.** Signaling message JSON Schema + golden fixtures every client must round-trip | yes |
-| `quality/` | Media quality lab: headless bot peers, network profiles, scorers, thresholds | yes |
-| `docs/` | Architecture, ADRs, plan, per-feature plans | — |
-| `scripts/` | Everything `make` calls. Hooks call these too. | — |
+## Repo map (pnpm workspace)
+| Path | What |
+|---|---|
+| `protocol/` | **The contract.** TS types + runtime validators for client⇄server and peer⇄peer messages, fixtures. Package `@clearcall/protocol`. |
+| `web/` | Vite + Preact + TypeScript PWA. `src/core/` = call engine (no UI imports), `src/ui/` = screens/components (no WebRTC calls), `src/core/types.ts` = the interface between them. |
+| `signaling/` | Cloudflare Worker + `Room` Durable Object; serves `web/dist` as static assets. |
+| `e2e/` | Playwright functional tests: multi-participant calls across Chromium/WebKit/Firefox, mobile viewports. |
+| `quality/` | Media quality lab: network profiles, reference media, scorers, thresholds. |
+| `scripts/` | Everything `make` calls. Hooks call these too. |
 
-## Commands — always go through `make` (same commands for you, hooks, CI, humans)
+## Commands — always via `make`
 ```
-make doctor            # toolchain + devices check. Run first when anything "doesn't work".
-make verify            # fast gate for what changed: format-check, lint, compile, unit tests
-make ios-build | ios-test | ios-run      # ios-run = build, install, launch on booted simulator
-make android-build | android-test | android-run
-make signaling-dev | signaling-test
-make protocol-check    # both clients + worker round-trip protocol/fixtures
-make e2e               # Maestro flows on iOS sim + Android emulator
-make quality PROFILE=4g_typical         # local media-quality run against bots
-make quality-all       # every profile in quality/profiles/
+make doctor          # toolchain check
+make dev             # build web + run worker locally at http://localhost:8787 (serves app + signaling)
+make verify          # fast gate for changed areas: format, lint, typecheck, unit tests
+make web-test | signaling-test | protocol-check
+make e2e             # Playwright multi-participant tests against the real worker (headless)
+make screenshots     # Playwright screenshots of every screen at phone + desktop sizes → quality/reports/screens/
+make quality PROFILE=4g_typical   # media quality lab run
 ```
-If a `make` target is missing for something you need, add it to the Makefile/scripts rather than running ad-hoc commands.
+Add missing targets to the Makefile/scripts rather than running ad-hoc commands repeatedly.
+
+## Git & commit policy (hook-enforced where possible)
+- `main` is the integration branch. **Never commit directly on `main`** (a hook blocks it). Work on `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `test/<slug>`, `docs/<slug>`.
+- **Commit early and often**: one logical step per commit (a module + its tests, a screen, a config change). Never batch a whole feature into one commit. Conventional messages: `feat(web): ...`, `fix(signaling): ...`. End with the `Co-Authored-By` trailer.
+- Before merging: `make verify` green on the branch (and `make e2e` if call behavior changed). Merge with `git merge --no-ff <branch>` from `main`, then delete the branch.
+- **Parallel work uses git worktrees** (Agent tool `isolation: "worktree"`): each agent gets its own branch + checkout, commits there, and the orchestrator merges. Agents must stay inside their assigned paths to keep merges clean.
+- No remote yet. Pushing asks the owner.
 
 ## Rules of the road
-- **Parity.** A user-facing feature is not done until it exists on iOS *and* Android with the same behavior. Shared Maestro flows in `quality/e2e/` prove it.
-- **The protocol is the contract.** Any signaling change starts in `protocol/` (schema + fixture), then worker, then both clients. Use the `protocol-change` skill.
-- **Never weaken the oracle.** Do not edit `quality/thresholds.yaml`, `quality/reference-media/`, or disable/skip tests to make something pass. If a threshold is wrong, stop and tell the user why. (A hook enforces this.)
-- **Prove UI changes visually.** Build, launch, screenshot both platforms (`ui-verify` skill) and look at the screenshots before saying a UI task is done.
-- **Media changes need numbers.** Anything touching codecs, bitrate, audio processing, jitter buffers, or congestion control must include a before/after `make quality` comparison in the PR/plan.
-- **Decisions get ADRs.** A choice that is expensive to reverse goes in `docs/adr/NNNN-title.md` (use the `adr` skill).
-- **Secrets never enter the repo or your context.** APNs keys, keystores, Cloudflare tokens live in env/keychain. Don't `cat` them.
-- **Test hooks are first-class.** Every media source (mic, camera) and sink must be injectable in the `qa` build so bots and tests can drive the app. Never hard-wire `AVCaptureDevice`/`Camera2` without going through the capture abstraction.
-- Don't edit generated files: `*.xcodeproj/`, `build/`, `.gradle/`, `DerivedData/`.
+- **Contract first.** Message shapes live only in `protocol/`; the UI↔engine interface only in `web/src/core/types.ts`. Change those first (`protocol-change` skill), then implementations.
+- **Never weaken the oracle.** Don't edit `quality/thresholds.yaml`, `quality/reference-media/`, or skip/disable tests to get green. Explain to the owner instead. (Hook-enforced.)
+- **Prove UI visually.** Screenshot at iPhone and desktop sizes and look at the images before calling UI work done (`ui-verify`).
+- **Prove calls end-to-end.** Call-behavior changes need a passing Playwright test with ≥2 real browser peers exchanging media.
+- **Media changes need numbers** (`quality-lab`): before/after on the same profiles.
+- **Decisions get ADRs** (`adr` skill). Ping the owner only for product/design decisions or spending money; decide engineering details yourself and record them.
+- Secrets never enter the repo or your context (`.dev.vars`, Cloudflare tokens).
+- Keep the client small: no heavy deps without a one-line justification in the plan. Target < 100 KB gzipped JS for first load.
 
-## Definition of done (per task)
-1. `make verify` green (the Stop hook runs it automatically for touched areas).
-2. New logic has unit tests on each platform it touches.
-3. UI: screenshots from both platforms reviewed. Media: quality report attached, no threshold regressions, bandwidth within budget.
-4. `docs/PLAN.md` updated.
+## Definition of done
+`make verify` green (Stop hook enforces) · tests for new logic · UI screenshots reviewed · call changes covered by E2E · media changes have a quality comparison · `docs/PLAN.md` updated · merged to `main` via `--no-ff`.

@@ -1,5 +1,5 @@
 link: { up_kbps: 20000, down_kbps: 50000, delay_ms: 10, jitter_ms: 2, loss_pct: 0 }
-topology: app-bot
+topology: p2p
 duration_s: 60
 corpus: [speech_noisy, talking_head]
 mode: voice
