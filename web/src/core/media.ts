@@ -37,11 +37,50 @@ export interface DocumentLike {
   removeEventListener(type: "visibilitychange", fn: () => void): void;
 }
 
-export function audioConstraints(mode: AudioMode): MediaTrackConstraints {
+/**
+ * Lab/diagnostic overrides of the audio defaults (URL flags parsed in deps.ts, e.g. `?abr=40000&ns=0`). Every field
+ * is optional; absent = the data-driven default. Never set in production URLs.
+ */
+export interface AudioTuning {
+  /** Opus send bitrate (bps) in voice mode (`?abr=`). */
+  voiceBitrate?: number;
+  /** Opus send bitrate (bps) in music mode (`?mabr=`). */
+  musicBitrate?: number;
+  /** Voice-mode browser noise suppression (`?ns=0|1`). Music mode is always off. */
+  ns?: boolean;
+  /** Voice-mode browser auto gain control (`?agc=0|1`). Music mode is always off. */
+  agc?: boolean;
+  /**
+   * Echo cancellation in both modes (`?ec=0|1`). Diagnostic only: in the lab both peers send the SAME corpus, so AEC
+   * sees a far-end signal correlated with the near end and suppresses it — `ec=0` measures that artifact.
+   */
+  ec?: boolean;
+  /** Opus DTX in voice mode (`?dtx=0|1`). Music mode is always off. */
+  dtx?: boolean;
+  /** Opus in-band FEC (`?fec=0|1`). */
+  fec?: boolean;
+  /**
+   * Music mode negotiates `stereo=1;sprop-stereo=1` by default; `?mstereo=0` forces mono (lab comparison). libwebrtc
+   * runs Opus in VOIP application mode for mono and AUDIO (music) mode only for stereo.
+   */
+  musicStereo?: boolean;
+}
+
+export function audioConstraints(mode: AudioMode, tuning: AudioTuning = {}): MediaTrackConstraints {
   // Music mode keeps echo cancellation ON (plan "Media details (B)"); the UI suggests headphones.
   return mode === "voice"
-    ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-    : { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+    ? {
+        echoCancellation: tuning.ec ?? true,
+        noiseSuppression: tuning.ns ?? true,
+        autoGainControl: tuning.agc ?? true,
+        channelCount: 1,
+      }
+    : {
+        echoCancellation: tuning.ec ?? true,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      };
 }
 
 export function videoConstraints(facing: Facing): MediaTrackConstraints {
@@ -93,6 +132,8 @@ export interface LocalMediaOptions {
   onTrack?: (kind: "audio" | "video", track: MediaStreamTrack | null) => void;
   onChange?: () => void;
   meterIntervalMs?: number;
+  /** Lab overrides of capture processing (NS/AGC). */
+  audioTuning?: AudioTuning;
 }
 
 export class LocalMedia {
@@ -160,7 +201,7 @@ export class LocalMedia {
       const errors: { kind: "audio" | "video"; e: unknown }[] = [];
       try {
         const s = await this.o.mediaDevices.getUserMedia({
-          audio: audioConstraints(st.mode),
+          audio: audioConstraints(st.mode, this.o.audioTuning),
           video: wantVideo ? videoConstraints(st.facing) : false,
         });
         audio = s.getAudioTracks()[0] ?? null;
@@ -171,7 +212,7 @@ export class LocalMedia {
         try {
           audio =
             (
-              await this.o.mediaDevices.getUserMedia({ audio: audioConstraints(st.mode) })
+              await this.o.mediaDevices.getUserMedia({ audio: audioConstraints(st.mode, this.o.audioTuning) })
             ).getAudioTracks()[0] ?? null;
         } catch (ea) {
           errors.push({ kind: "audio", e: ea });
@@ -348,7 +389,9 @@ export class LocalMedia {
   ): Promise<MediaStreamTrack | null> {
     try {
       const s = await this.o.mediaDevices.getUserMedia(
-        kind === "audio" ? { audio: audioConstraints(this.state.mode) } : { video: videoConstraints(facing) },
+        kind === "audio"
+          ? { audio: audioConstraints(this.state.mode, this.o.audioTuning) }
+          : { video: videoConstraints(facing) },
       );
       const t = (kind === "audio" ? s.getAudioTracks() : s.getVideoTracks())[0] ?? null;
       if (t) this.watchTrack(t);

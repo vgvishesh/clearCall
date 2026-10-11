@@ -3,12 +3,14 @@ import {
   mLineKinds,
   mungeDescription,
   mungeOpusFmtp,
+  mungeVideoFmtp,
   opusParamsFor,
   opusPayloadTypes,
   parseFmtp,
   readOpusFmtp,
   sdpOrigin,
   sdpSessionId,
+  withVideoStartBitrate,
 } from "./sdp.ts";
 import { CHROME_OFFER, FIREFOX_OFFER, SAFARI_ANSWER_NO_FMTP } from "./testing/sdp-fixtures.ts";
 
@@ -21,7 +23,14 @@ const changedLines = (a: string, b: string) => {
 describe("sdp munging", () => {
   it("mode params", () => {
     expect(opusParamsFor("voice")).toEqual({ useinbandfec: 1, usedtx: 1, maxaveragebitrate: 128000 });
-    expect(opusParamsFor("music")).toEqual({ useinbandfec: 1, usedtx: 0, maxaveragebitrate: 128000 });
+    // music negotiates stereo → libwebrtc Opus AUDIO application (W4 package A)
+    expect(opusParamsFor("music")).toEqual({
+      useinbandfec: 1,
+      usedtx: 0,
+      maxaveragebitrate: 128000,
+      stereo: 1,
+      "sprop-stereo": 1,
+    });
   });
 
   it("Chrome: rewrites only the opus fmtp line, leaves RED and others alone, keeps CRLF", () => {
@@ -43,6 +52,7 @@ describe("sdp munging", () => {
       useinbandfec: "1",
       usedtx: "0",
       maxaveragebitrate: "128000",
+      "sprop-stereo": "1",
     });
     expect(music).toContain("a=fmtp:101 0-15");
     expect(music).toContain("a=fmtp:126 profile-level-id=42e01f");
@@ -110,5 +120,38 @@ describe("sdpSessionId", () => {
   it("sdpOrigin returns the whole o= line (id + version)", () => {
     expect(sdpOrigin(CHROME_OFFER)).toBe("o=- 4611731400430051336 2 IN IP4 127.0.0.1");
     expect(sdpOrigin("v=0\r\n")).toBeNull();
+  });
+});
+
+describe("video start bitrate munging", () => {
+  const fmtpOf = (sdp: string, pt: string) =>
+    sdp.split(/\r?\n/).find((l) => l.startsWith(`a=fmtp:${pt} `)) ?? null;
+
+  it("adds x-google-start-bitrate to every real video codec, not rtx, and leaves audio alone", () => {
+    const out = mungeVideoFmtp(CHROME_OFFER, { "x-google-start-bitrate": 1500 });
+    expect(fmtpOf(out, "96")).toBe("a=fmtp:96 x-google-start-bitrate=1500"); // VP8 had no fmtp: added
+    expect(fmtpOf(out, "98")).toBe("a=fmtp:98 profile-id=0;x-google-start-bitrate=1500"); // VP9 kept its params
+    expect(fmtpOf(out, "97")).toBe("a=fmtp:97 apt=96"); // rtx untouched
+    expect(readOpusFmtp(out)).toEqual(readOpusFmtp(CHROME_OFFER));
+    expect(out.includes("\r\n")).toBe(CHROME_OFFER.includes("\r\n"));
+  });
+
+  it("replaces an existing value (idempotent) and handles Firefox/Safari shapes", () => {
+    const once = mungeVideoFmtp(CHROME_OFFER, { "x-google-start-bitrate": 600 });
+    expect(mungeVideoFmtp(once, { "x-google-start-bitrate": 600 })).toBe(once);
+    const ff = mungeVideoFmtp(FIREFOX_OFFER, { "x-google-start-bitrate": 600 });
+    expect(fmtpOf(ff, "126")).toContain("packetization-mode=1;x-google-start-bitrate=600");
+    expect(fmtpOf(ff, "120")).toBe("a=fmtp:120 max-fs=12288;max-fr=60;x-google-start-bitrate=600");
+    const sa = mungeVideoFmtp(SAFARI_ANSWER_NO_FMTP, { "x-google-start-bitrate": 600 });
+    expect(fmtpOf(sa, "96")).toBe("a=fmtp:96 x-google-start-bitrate=600");
+  });
+
+  it("withVideoStartBitrate: null/0 and rollback pass through unchanged", () => {
+    const offer = { type: "offer" as RTCSdpType, sdp: CHROME_OFFER };
+    expect(withVideoStartBitrate(offer, null)).toBe(offer);
+    expect(withVideoStartBitrate(offer, 0)).toBe(offer);
+    const rb = { type: "rollback" as RTCSdpType };
+    expect(withVideoStartBitrate(rb, 1500)).toBe(rb);
+    expect(withVideoStartBitrate(offer, 1500).sdp).toContain("x-google-start-bitrate=1500");
   });
 });

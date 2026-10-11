@@ -126,13 +126,15 @@ describe("QA hook recording", () => {
       static isTypeSupported = (m: string) => m === "video/webm";
       state = "inactive";
       mimeType: string;
+      static lastOpts: { mimeType?: string; videoBitsPerSecond?: number } | undefined;
       ondataavailable: ((e: { data: Blob }) => void) | null = null;
       onstop: (() => void) | null = null;
       onerror: (() => void) | null = null;
       constructor(
         readonly stream: MediaStream,
-        opts?: { mimeType?: string },
+        opts?: { mimeType?: string; videoBitsPerSecond?: number },
       ) {
+        FakeRecorder.lastOpts = opts;
         this.mimeType = opts?.mimeType ?? "";
       }
       start() {
@@ -158,6 +160,8 @@ describe("QA hook recording", () => {
       MediaRecorder: FakeRecorder as unknown as typeof MediaRecorder,
     });
     hook.startRecording("p1");
+    // High recorder bitrate: the recording must not be the quality bottleneck the lab measures.
+    expect(FakeRecorder.lastOpts?.videoBitsPerSecond).toBeGreaterThanOrEqual(8_000_000);
     const blob = await hook.stopRecording("p1");
     expect(blob).toBeInstanceOf(Blob);
     expect(blob!.type).toBe("video/webm");

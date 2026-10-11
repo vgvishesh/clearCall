@@ -18,6 +18,13 @@ export interface QaSources {
   log?: Logger;
 }
 
+/**
+ * Recording is a second lossy generation on top of the call's encode. Chrome's default (~2.5 Mbps VP8) cost
+ * ~2 VMAF at a 1.5 Mbps call (lab selftest, VP9 360p: 80.8 vs 82.9); 8 Mbps is transparent (8 vs 30 Mbps: ±0.1).
+ * Audio is left at the browser default so speech/music scores stay comparable with earlier reports.
+ */
+export const QA_RECORDER_VIDEO_BPS = 8_000_000;
+
 interface Recording {
   rec: MediaRecorder;
   chunks: Blob[];
@@ -59,7 +66,10 @@ export function createQaHook(src: QaSources): QaHook {
         return;
       }
       const mimeType = pickMime(MR);
-      const rec = new MR(p.stream, mimeType ? { mimeType } : undefined);
+      const rec = new MR(p.stream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: QA_RECORDER_VIDEO_BPS,
+      });
       const chunks: Blob[] = [];
       const done = new Promise<Blob | null>((resolve) => {
         rec.ondataavailable = (ev) => {

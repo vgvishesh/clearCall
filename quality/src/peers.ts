@@ -1,6 +1,8 @@
 /**
  * Headless Chromium participants for the lab and diag: one browser instance per participant (no shared-process
- * CPU skew), fake or file-fed media, driven through the UI testids and the QA hook (`?qa=1`).
+ * CPU skew) or — for large calls (host limit: > ~6 Chromium processes throttles the shared M1) — one shared browser
+ * with one context per participant (`LaunchOptions.browser`). Fake or file-fed media, driven through the UI
+ * testids and the QA hook (`?qa=1`).
  */
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from "@playwright/test";
 import { TID } from "../../web/src/core/testids.ts";
@@ -28,6 +30,34 @@ export interface LaunchOptions {
   wsEndpoint?: string;
   /** Extra Chromium args (e.g. --unsafely-treat-insecure-origin-as-secure=…). */
   extraArgs?: string[];
+  /** App URL flags added to every page load, e.g. "abr=40000&ns=0" (core/deps.ts parses them). */
+  flags?: string;
+  /** Shared browser (one context per participant). The peer then never closes the browser. */
+  browser?: Browser;
+  /** Page viewport (default 960×600 @1). Phone-like sizes make tiles tall enough for the tier caps to bind. */
+  viewport?: Viewport;
+  /** Script run in every page before the app (lab instrumentation, e.g. loss emulation). */
+  initScript?: string;
+  /** Disable the page CSP (only for lab instrumentation that needs Blob workers). */
+  bypassCSP?: boolean;
+}
+
+export interface Viewport {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+}
+
+/** "390x844@3" → viewport; undefined for empty/invalid input. */
+export function parseViewport(spec: string | undefined): Viewport | undefined {
+  const m = spec ? /^(\d+)x(\d+)(?:@(\d+(?:\.\d+)?))?$/.exec(spec.trim()) : null;
+  if (!m) return undefined;
+  return { width: Number(m[1]), height: Number(m[2]), deviceScaleFactor: m[3] ? Number(m[3]) : 1 };
+}
+
+/** One headless Chromium for N participant contexts (all share the same fake media files). */
+export async function launchSharedBrowser(media?: PeerMedia, extraArgs?: string[]): Promise<Browser> {
+  return chromium.launch({ args: chromiumArgs(media, extraArgs), headless: true });
 }
 
 export interface ConsoleLine {
@@ -48,7 +78,7 @@ export function chromiumArgs(media?: PeerMedia, extra: string[] = []): string[] 
   ];
   if (media?.video) a.push(`--use-file-for-fake-video-capture=${media.video}`);
   if (media?.audio) a.push(`--use-file-for-fake-audio-capture=${media.audio}`);
-  return [...a, ...extra];
+  return [...a, LAB_MARKER, ...extra];
 }
 
 export class Peer {
@@ -56,6 +86,10 @@ export class Peer {
   readonly pageErrors: string[] = [];
   readonly failedRequests: string[] = [];
   joinClickedAt: number | null = null;
+  /** App URL flags for every navigation (see LaunchOptions.flags). */
+  flags = "";
+  /** false = shared browser (LaunchOptions.browser): close() only closes this peer's context. */
+  ownsBrowser = true;
   private cdp: CDPSession | null = null;
 
   constructor(
@@ -74,18 +108,26 @@ export class Peer {
 
   static async launch(o: LaunchOptions): Promise<Peer> {
     const args = chromiumArgs(o.media, o.extraArgs);
-    const browser = o.wsEndpoint
-      ? await chromium.connect(o.wsEndpoint, {
-          headers: { "x-playwright-launch-options": JSON.stringify({ args, headless: true }) },
-          timeout: 30_000,
-        })
-      : await chromium.launch({ args, headless: true });
+    const browser = o.browser
+      ? o.browser
+      : o.wsEndpoint
+        ? await chromium.connect(o.wsEndpoint, {
+            headers: { "x-playwright-launch-options": JSON.stringify({ args, headless: true }) },
+            timeout: 30_000,
+          })
+        : await chromium.launch({ args, headless: true });
     const context = await browser.newContext({
       permissions: ["camera", "microphone"],
-      viewport: { width: 960, height: 600 },
+      viewport: { width: o.viewport?.width ?? 960, height: o.viewport?.height ?? 600 },
+      deviceScaleFactor: o.viewport?.deviceScaleFactor ?? 1,
+      ...(o.bypassCSP ? { bypassCSP: true } : {}),
     });
+    if (o.initScript) await context.addInitScript(o.initScript);
     const page = await context.newPage();
-    return new Peer(o.label, o.name, browser, context, page);
+    const peer = new Peer(o.label, o.name, browser, context, page);
+    peer.flags = o.flags ?? "";
+    peer.ownsBrowser = !o.browser;
+    return peer;
   }
 
   // ── UI flow ──
@@ -103,7 +145,7 @@ export class Peer {
 
   /** Home → Start a call → Lobby → Join; returns the link. */
   async startCall(appUrl: string): Promise<string> {
-    await this.page.goto(withQa(`${appUrl}/`));
+    await this.page.goto(withQa(`${appUrl}/`, this.flags));
     await this.tid(TID.startCall).click();
     await this.joinFromLobby();
     const link = (await this.state()).link;
@@ -115,7 +157,7 @@ export class Peer {
     // Containers reach the app under a different host than the host machine; keep path + fragment.
     const u = new URL(link);
     const target = appUrl ? new URL(`${u.pathname}${u.search}${u.hash}`, appUrl).toString() : link;
-    await this.page.goto(withQa(target));
+    await this.page.goto(withQa(target, this.flags));
     await this.joinFromLobby();
   }
 
@@ -235,16 +277,73 @@ export class Peer {
 
   async close(): Promise<void> {
     await this.context.close().catch(() => {});
-    await this.browser.close().catch(() => {});
+    if (this.ownsBrowser) await this.browser.close().catch(() => {});
   }
 }
 
-export function withQa(url: string): string {
+export function withQa(url: string, flags = ""): string {
   const u = new URL(url);
+  for (const [k, v] of new URLSearchParams(flags)) u.searchParams.set(k, v);
   u.searchParams.set("qa", "1");
   return u.toString();
 }
 
+/** Parse `ps -o time=` ("[[D-]HH:]MM:SS.ss", macOS minutes may exceed 59) to seconds. */
+export function parsePsTime(t: string): number {
+  const [days, rest] = t.includes("-") ? t.split("-", 2) : ["0", t];
+  return Number(days) * 86400 + rest!.split(":").reduce((acc, part) => acc * 60 + Number(part), 0);
+}
+
+/** Cumulative CPU seconds of the given processes and all their descendants (whole-browser CPU incl. encoders). */
+export function treeCpuSeconds(psOutput: string, roots: readonly number[]): number {
+  const rows = psOutput
+    .split("\n")
+    .map((l) => l.trim().split(/\s+/))
+    .filter((r) => r.length >= 3)
+    .map(([pid, ppid, time]) => ({ pid: Number(pid), ppid: Number(ppid), cpu: parsePsTime(time!) }));
+  const children = new Map<number, number[]>();
+  for (const r of rows) children.set(r.ppid, [...(children.get(r.ppid) ?? []), r.pid]);
+  const want = new Set<number>();
+  const stack = [...roots];
+  while (stack.length) {
+    const p = stack.pop()!;
+    if (want.has(p)) continue;
+    want.add(p);
+    stack.push(...(children.get(p) ?? []));
+  }
+  return rows.filter((r) => want.has(r.pid)).reduce((a, r) => a + r.cpu, 0);
+}
+
+/**
+ * Marker switch on every local Chromium this process launches (Chromium ignores unknown switches), so the lab can
+ * find its own browser processes without touching the owner's or another worktree's browsers.
+ */
+export const LAB_MARKER = `--clearcall-lab-run=${process.pid}`;
+
+/** Cumulative whole-tree CPU seconds of this process's local browsers (null when none, e.g. netem containers). */
+export async function browserCpu(): Promise<{ cpuS: number; t: number } | null> {
+  const { execFile } = await import("node:child_process");
+  const out = await new Promise<string>((res) =>
+    execFile("ps", ["-A", "-ww", "-o", "pid=,ppid=,time=,command="], { maxBuffer: 64 << 20 }, (err, stdout) =>
+      res(err ? "" : stdout),
+    ),
+  );
+  const roots = out
+    .split("\n")
+    .filter((l) => l.includes(LAB_MARKER))
+    .map((l) => Number(l.trim().split(/\s+/)[0]));
+  if (!roots.length) return null;
+  return { cpuS: treeCpuSeconds(out, roots), t: Date.now() };
+}
+
+/** Mean CPU between two snapshots, % of one core (800 = all 8 cores of the host). */
+export function cpuPctBetween(
+  a: { cpuS: number; t: number } | null,
+  b: { cpuS: number; t: number } | null,
+): number | null {
+  if (!a || !b || b.t <= a.t) return null;
+  return (100 * (b.cpuS - a.cpuS)) / ((b.t - a.t) / 1000);
+}
 /** Poll `fn` every `intervalMs` until truthy or timeout (throws with `what`). */
 export async function poll(
   fn: () => Promise<boolean>,

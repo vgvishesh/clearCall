@@ -1,18 +1,35 @@
-# PROPOSED by the agent — owner reviews and adopts with:  mv quality/thresholds.proposed.yaml quality/thresholds.yaml
-# Once adopted, agents cannot edit thresholds.yaml (hook-enforced). Numbers are starting targets; tighten after the WhatsApp baseline run (M2).
-# Bandwidth = mean kbps per participant, send+receive, video on.
+# PROPOSED v2 (W4, 2026-10-12) — derived from measurements; owner adopts with:
+#   mv quality/thresholds.proposed.yaml quality/thresholds.yaml
+# Once adopted, agents cannot edit thresholds.yaml (hook-enforced).
+#
+# What changed from v1 and why (evidence: ADR-0005 W4 section, ADR-0007, W4 compare tables):
+# - Bandwidth gates now use send_kbps (what the policy controls), not send+receive `kbps` (v1 gated 1500 total
+#   while our own 1:1 policy sends 1500).
+# - pesq_wb gates only on the clean-speech corpus (speech_clean_wifi). On noisy input PESQ penalises noise removal
+#   (reads ~1.6 regardless); noisy profiles are judged with DNSMOS instead.
+# - dnsmos_ovrl_min set from browser-NS reality (2.89 measured); 3.3 needs ML noise suppression (future ADR).
+# - Audio budgets via audio_kbps; music gated by music_snr_db.
+# - Network profiles other than good_wifi need --netem (not yet runnable on this host); their numbers are
+#   placeholders to be set from the first shaped runs.
+#
+# Measured on synthetic corpus (pessimistic for VMAF), headless software encoders, unshaped localhost.
 defaults:
   setup_success_rate_min: 0.99
-  time_to_first_frame_ms_max: 1500
-  audio_mouth_to_ear_ms_max: 250        # excluding the profile's configured network delay
-  freeze_ratio_max: 0.01                # totalFreezesDuration / duration
-  audio_concealment_ratio_max: 0.03
+  time_to_first_frame_ms_max: 1500        # measured 673–848
+  audio_mouth_to_ear_ms_max: 150          # measured 35–58 capture→playout (excl. device buffers)
+  freeze_ratio_max: 0.01                  # measured 0.0048
+  audio_concealment_ratio_max: 0.03       # measured 0
 profiles:
-  good_wifi:     { vmaf_min: 85, pesq_wb_min: 4.2, dnsmos_ovrl_min: 3.3, kbps_max: 1500 }
-  4g_typical:    { vmaf_min: 80, pesq_wb_min: 4.0, dnsmos_ovrl_min: 3.2, kbps_max: 1200 }
-  3g_lossy:      { vmaf_min: 60, pesq_wb_min: 3.6, dnsmos_ovrl_min: 3.0, kbps_max: 500, freeze_ratio_max: 0.03, audio_concealment_ratio_max: 0.06 }
-  high_rtt_intl: { vmaf_min: 78, pesq_wb_min: 3.9, kbps_max: 1200, audio_mouth_to_ear_ms_max: 300 }
-  bw_squeeze:    { vmaf_min: 55, pesq_wb_min: 3.6, adapt_down_s_max: 3, recover_up_s_max: 10, freeze_ratio_max: 0.03 }
-  music_mode:    { music_mode_better_than_voice: true, kbps_max: 250 }
-  group_10:      { vmaf_thumbnail_min: 60, pesq_wb_min: 3.6, kbps_max: 2000, cpu_pct_max: 80 }
-# Comparative gate (M2+): for each profile, ≥ WhatsApp's score at ≤ WhatsApp's bandwidth, measured with the same corpus on the same devices.
+  good_wifi:          { vmaf_min: 84, dnsmos_ovrl_min: 2.8, send_kbps_max: 1650, audio_kbps_max: 40 }   # VMAF 85.5 (3 runs), send 1524, DNSMOS 2.89, audio 28
+  speech_clean_wifi:  { pesq_wb_min: 3.85, dnsmos_ovrl_min: 3.3, audio_kbps_max: 40 }                    # PESQ 3.94±0.02, OVRL 3.39, audio 27.4
+  music_mode:         { music_snr_db_min: 15, audio_kbps_max: 105 }                                       # 21.1±1.4 dB at 96 kbps stereo (EC-off lab caveat, ADR-0007)
+  group_10:           { vmaf_min: 50, send_kbps_max: 1800, proc_cpu_pct_max: 80 }                          # VP8 180p15: VMAF 53.9–55.6, send 1626 at N=10
+  # Shaped profiles — set from the first --netem runs (placeholders, not gating until measured):
+  4g_typical:         { vmaf_min: 75, dnsmos_ovrl_min: 2.7, send_kbps_max: 1650 }
+  3g_lossy:           { vmaf_min: 55, dnsmos_ovrl_min: 2.5, send_kbps_max: 500, freeze_ratio_max: 0.03, audio_concealment_ratio_max: 0.06 }
+  high_rtt_intl:      { vmaf_min: 75, send_kbps_max: 1650, audio_mouth_to_ear_ms_max: 350 }
+  bw_squeeze:         { vmaf_min: 50, freeze_ratio_max: 0.03 }
+# Owner decisions that would move these numbers:
+# - tier 3–4 video cap 600 → 800 kbps: +6–7 VMAF at 3–4 people (68→75, 270p→360p) for +32 % upload.
+# - ML noise suppression (RNNoise/DeepFilterNet): would allow dnsmos_ovrl_min ≈ 3.2 on noisy speech.
+# Comparative gate (later): ≥ WhatsApp's score at ≤ WhatsApp's bandwidth on the same corpus and devices.

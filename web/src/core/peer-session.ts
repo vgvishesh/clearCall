@@ -23,10 +23,16 @@ import {
   type SignalPayload,
 } from "@clearcall/protocol";
 import type { Clock, TimerHandle } from "./clock.ts";
-import { applyCodecPreferences, type CodecLike, type CodecPrefs } from "./codecs.ts";
+import { applyCodecPreferences, type CodecLike, type CodecPrefs, codecTier } from "./codecs.ts";
 import { errInfo, type Logger, nullLogger, short } from "./log.ts";
-import { audioPolicy, mergeAudioEncoding, mergeVideoEncoding, videoPolicy } from "./policy.ts";
-import { mungeDescription, sdpOrigin, sdpSessionId } from "./sdp.ts";
+import {
+  audioPolicy,
+  mergeAudioEncoding,
+  mergeVideoEncoding,
+  videoPolicy,
+  videoStartBitrateKbps,
+} from "./policy.ts";
+import { mungeDescription, sdpOrigin, sdpSessionId, withVideoStartBitrate } from "./sdp.ts";
 import type { AudioMode, PeerConnectionStatus } from "./types.ts";
 
 export type PeerRole = "offerer" | "answerer";
@@ -311,7 +317,8 @@ export class PeerSession {
     const caps = this.o.getCapabilities;
     if (!prefs || !caps) return;
     if (this.audioTx) applyCodecPreferences(this.audioTx, "audio", caps("audio"), prefs, this.log);
-    if (this.videoTx) applyCodecPreferences(this.videoTx, "video", caps("video"), prefs, this.log);
+    if (this.videoTx)
+      applyCodecPreferences(this.videoTx, "video", caps("video"), prefs, this.log, this.participants);
   }
 
   private openCtl() {
@@ -352,7 +359,7 @@ export class PeerSession {
       this.makingOffer = true;
       const offer = await pc.createOffer();
       if (this.pc !== pc || pc.signalingState !== "stable") return;
-      await this.setLocal(pc, offer);
+      await this.setLocal(pc, this.withVideoStart(offer));
       if (this.pc !== pc) return;
       this.log.info("offer sent", { peer: short(this.remoteId), reason });
       this.offerSentAt = this.o.clock.now();
@@ -365,7 +372,11 @@ export class PeerSession {
   }
 
   private async setLocal(pc: RTCPeerConnection, desc: RTCSessionDescriptionInit) {
-    const munged = mungeDescription(desc as { type: RTCSdpType; sdp?: string }, this.o.local().mode);
+    const munged = mungeDescription(
+      desc as { type: RTCSdpType; sdp?: string },
+      this.o.local().mode,
+      this.o.codecPrefs?.audio,
+    );
     try {
       await pc.setLocalDescription(munged);
     } catch (e) {
@@ -374,6 +385,14 @@ export class PeerSession {
       this.log.warn("munged SLD rejected, using plain", errInfo(e));
       await pc.setLocalDescription(desc);
     }
+  }
+
+  /** Video start bitrate (policy per participant count; `?vstart=` lab override) on a description. */
+  private withVideoStart<T extends { type: RTCSdpType; sdp?: string | undefined }>(desc: T): T {
+    return withVideoStartBitrate(
+      desc,
+      videoStartBitrateKbps(this.participants, this.o.codecPrefs?.videoStartKbps),
+    );
   }
 
   private sendDescription(pc: RTCPeerConnection) {
@@ -456,9 +475,11 @@ export class PeerSession {
       }
     }
 
+    desc = this.withVideoStart(desc); // our sender's start bitrate comes from the remote description
+
     try {
       this.isSettingRemoteAnswerPending = desc.type === "answer";
-      await pc.setRemoteDescription(mungeDescription(desc, this.o.local().mode)); // implicit rollback if needed
+      await pc.setRemoteDescription(mungeDescription(desc, this.o.local().mode, this.o.codecPrefs?.audio)); // implicit rollback if needed
     } catch (e) {
       this.log.warn("setRemoteDescription failed", {
         peer: short(this.remoteId),
@@ -478,7 +499,7 @@ export class PeerSession {
       try {
         const answer = await pc.createAnswer();
         if (this.pc !== pc) return;
-        await this.setLocal(pc, answer);
+        await this.setLocal(pc, this.withVideoStart(answer));
         if (this.pc !== pc) return;
         this.negotiatedOnce = true;
         this.sendDescription(pc);
@@ -728,8 +749,15 @@ export class PeerSession {
 
   setParticipants(n: number): void {
     if (n === this.participants) return;
+    const tierChanged = codecTier(n) !== codecTier(this.participants);
     this.participants = n;
     void this.applyEncodings();
+    if (tierChanged && this.bound && !this.closed) {
+      // Codec order is per tier (ADR-0005): re-apply and renegotiate so the pair switches codec (perfect negotiation
+      // handles both sides doing this at once). Before the first negotiation the new order simply applies.
+      this.applyCodecs();
+      if (this.negotiatedOnce) void this.makeOffer("codec-tier");
+    }
   }
 
   setRemoteView(height: number): void {
@@ -748,7 +776,7 @@ export class PeerSession {
         sourceShortSide: local.sourceShortSide,
       });
       await this.setParams(this.videoTx?.sender, (p) => mergeVideoEncoding(p, v), "video", v);
-      const a = audioPolicy(local.mode);
+      const a = audioPolicy(local.mode, this.o.codecPrefs?.audio);
       await this.setParams(this.audioTx?.sender, (p) => mergeAudioEncoding(p, a.maxBitrate), "audio", a);
     });
     return this.paramsTail;

@@ -6,11 +6,14 @@
  *   make diag N=4 DURATION=60 ARGS="--fault drop-signaling@20s"
  *   pnpm --filter @clearcall/quality exec tsx src/diag.ts N=4 DURATION=60 [--url …] [--fault spec]…
  *        [--netem --profile 4g_typical]
+ * Also: [--flags "vcodec=vp8"] (app URL flags for every peer). N > 5 runs in one shared Chromium (host limit).
+ * ramp.json: per stream time-to-target resolution/bitrate after join and overshoot (src/ramp.ts).
  * Fault spec: <drop-signaling|restart-ice|kill-peer>@<seconds>[:p<index>] (restart-ice/kill-peer target the
  * injecting peer's first remote).
  */
 import { closeSync, existsSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Browser } from "@playwright/test";
 import {
   type Anomaly,
   type DiagInput,
@@ -20,6 +23,7 @@ import {
   parseFault,
 } from "./anomalies.ts";
 import { renderDiagSummary } from "./diag-report.ts";
+import { MAX_BROWSERS } from "./lab.ts";
 import {
   containerAppUrl,
   dockerAvailable,
@@ -29,8 +33,9 @@ import {
   startPeerContainer,
   stopPeerContainers,
 } from "./netem.ts";
-import { cpuPct, Peer } from "./peers.ts";
+import { browserCpu, cpuPct, cpuPctBetween, launchSharedBrowser, Peer } from "./peers.ts";
 import { linkAt, loadProfile } from "./profiles.ts";
+import { type RampResult, rampFor, worstRamp } from "./ramp.ts";
 import { DEV_LOG, ensureDir, log, parseArgs, REPORTS_DIR, timestamp } from "./util.ts";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message.split("\n")[0]! : String(e));
@@ -95,18 +100,28 @@ async function main(): Promise<number> {
     shaping = `netem ${profile.name}${containers.some((x) => !x.ingressShaped) ? " (uplink only)" : ""}`;
   }
 
+  const flags = a.get("flags") ?? "";
   const peers: Peer[] = [];
+  let shared: Browser | null = null;
+  const ramps: Record<string, RampResult[]> = {};
+  let procCpuPct: number | null = null;
   const evidence: PeerEvidence[] = [];
   const cpu: Record<string, number | null> = {};
   let t0 = Date.now();
   const timers: NodeJS.Timeout[] = [];
   try {
+    if (!containers.length && n > MAX_BROWSERS) {
+      shared = await launchSharedBrowser(undefined, extraArgs);
+      log(`one shared Chromium with ${n} contexts (host browser-process limit)`);
+    }
     for (let i = 0; i < n; i++)
       peers.push(
         await Peer.launch({
           label: `peer-${i}`,
           name: `Diag ${i}`,
           extraArgs,
+          flags,
+          ...(shared ? { browser: shared } : {}),
           ...(containers[i] ? { wsEndpoint: containers[i]!.wsEndpoint } : {}),
         }),
       );
@@ -128,6 +143,7 @@ async function main(): Promise<number> {
 
     t0 = Date.now();
     const cpu0 = await Promise.all(peers.map((p) => p.cpuMetrics()));
+    const proc0 = await browserCpu();
     for (const f of faults)
       timers.push(
         setTimeout(async () => {
@@ -144,6 +160,7 @@ async function main(): Promise<number> {
     const end = t0 + duration * 1000;
     while (Date.now() < end) await new Promise((r) => setTimeout(r, Math.min(5000, end - Date.now())));
     const cpu1 = await Promise.all(peers.map((p) => p.cpuMetrics()));
+    procCpuPct = cpuPctBetween(proc0, await browserCpu());
 
     for (const [i, p] of peers.entries()) {
       const pd = ensureDir(join(dir, p.label));
@@ -154,6 +171,7 @@ async function main(): Promise<number> {
       cpu[p.label] = cpuPct(cpu0[i] ?? null, cpu1[i] ?? null);
       writeFileSync(join(pd, "logs.json"), JSON.stringify(logs, null, 1));
       writeFileSync(join(pd, "timeline.json"), JSON.stringify(timeline));
+      if (p.joinClickedAt !== null) ramps[p.label] = rampFor(timeline, logs, p.joinClickedAt);
       writeFileSync(
         join(pd, "console.txt"),
         [
@@ -178,14 +196,29 @@ async function main(): Promise<number> {
   } finally {
     for (const t of timers) clearTimeout(t);
     await Promise.all(peers.map((p) => p.close()));
+    await shared?.close().catch(() => {});
     if (containers.length) await stopPeerContainers(containers);
   }
+  const rampWorst = worstRamp(Object.values(ramps).flat());
+  writeFileSync(join(dir, "ramp.json"), JSON.stringify({ worst: rampWorst, peers: ramps }, null, 1));
+  log(
+    `ramp (worst stream): time-to-target ${rampWorst.time_to_target_s ?? "never"} s, time-to-80%-cap ${rampWorst.time_to_kbps_s ?? "never"} s, overshoot ${rampWorst.overshoot_pct ?? "—"} %; browser CPU ${procCpuPct === null ? "—" : `${Math.round(procCpuPct)} % of one core`}`,
+  );
 
   const workerLog = readFrom(DEV_LOG, devLogOffset);
   writeFileSync(join(dir, "worker.log"), workerLog);
   writeFileSync(
     join(dir, "cpu.json"),
-    JSON.stringify({ unit: "% of one core, renderer main thread (CDP TaskDuration)", cpu }, null, 2),
+    JSON.stringify(
+      {
+        unit: "% of one core, renderer main thread (CDP TaskDuration)",
+        cpu,
+        browser_tree_pct: procCpuPct,
+        browser_tree_unit: "% of one core, all local browser processes incl. encoder threads",
+      },
+      null,
+      2,
+    ),
   );
   const input: DiagInput = { participants: n, peers: evidence, workerLog, faults, t0 };
   const anomalies: Anomaly[] = findAnomalies(input);
@@ -197,6 +230,9 @@ async function main(): Promise<number> {
     shaping,
     faults,
     cpu,
+    browserCpuPct: procCpuPct,
+    flags,
+    ramp: rampWorst,
     dir,
   };
   writeFileSync(join(dir, "summary.md"), renderDiagSummary(input, anomalies, meta));

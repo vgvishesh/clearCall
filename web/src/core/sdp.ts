@@ -1,19 +1,28 @@
 /**
  * SDP munging — only Opus fmtp parameters, nothing structural.
  *
- * Mode-dependent (plan "Media details (B)"): voice `useinbandfec=1;usedtx=1`, music `useinbandfec=1;usedtx=0`,
- * both with `maxaveragebitrate=128000` advertised (actual send bitrate is set via setParameters).
+ * Mode-dependent (plan "Media details (B)"): voice `useinbandfec=1;usedtx=1`, music `useinbandfec=1;usedtx=0;stereo=1;
+ * sprop-stereo=1`, both with `maxaveragebitrate=128000` advertised (actual send bitrate is set via setParameters).
+ * Music negotiates stereo because libwebrtc runs Opus in VOIP application mode for mono and AUDIO (music) mode only
+ * for stereo: +16 dB music SNR at the same 96 kbps in the quality lab (W4 package A); the capture stays mono.
  *
  * Applied to (a) our local offer/answer before setLocalDescription — our receive preference — and (b) the remote
  * description before setRemoteDescription — libwebrtc configures OUR Opus encoder (DTX/FEC) from the remote's fmtp,
  * so this is what makes our own sending follow our mode.
  */
+import type { AudioTuning } from "./media.ts";
 import type { AudioMode } from "./types.ts";
 
 export type FmtpParams = Record<string, string | number>;
 
-export function opusParamsFor(mode: AudioMode): FmtpParams {
-  return { useinbandfec: 1, usedtx: mode === "voice" ? 1 : 0, maxaveragebitrate: 128_000 };
+export function opusParamsFor(mode: AudioMode, tuning: AudioTuning = {}): FmtpParams {
+  const p: FmtpParams = {
+    useinbandfec: tuning.fec === false ? 0 : 1,
+    usedtx: mode === "voice" && tuning.dtx !== false ? 1 : 0,
+    maxaveragebitrate: 128_000,
+  };
+  if (mode === "music" && tuning.musicStereo !== false) Object.assign(p, { stereo: 1, "sprop-stereo": 1 });
+  return p;
 }
 
 function eolOf(sdp: string): string {
@@ -54,12 +63,42 @@ export function opusPayloadTypes(sdp: string): string[] {
 
 /** Set (add or replace) the given Opus fmtp parameters; other parameters and lines are untouched. */
 export function mungeOpusFmtp(sdp: string, params: FmtpParams): string {
+  return mungeFmtp(sdp, /^a=rtpmap:(\d+) opus\/48000/i, params);
+}
+
+/** Video payload types carrying a real codec (not rtx/red/ulpfec/flexfec), any m=video section. */
+const VIDEO_CODEC_RTPMAP = /^a=rtpmap:(\d+) (VP8|VP9|H264|H265|AV1)\/90000/i;
+
+/**
+ * Video fmtp (plan W4 V2): `x-google-start-bitrate` (kbps) sets libwebrtc's initial bandwidth estimate, so the
+ * encoder doesn't start at the 300 kbps default (→ initial frame-size drop to ≤ 360p and a slow climb back).
+ * Like Opus, applied to both local and remote descriptions: our sender is configured from the remote description.
+ */
+export function mungeVideoFmtp(sdp: string, params: FmtpParams): string {
+  return mungeFmtp(sdp, VIDEO_CODEC_RTPMAP, params);
+}
+
+/** The video start bitrate on a description (rollback/empty pass through). */
+export function withVideoStartBitrate<T extends { type: RTCSdpType; sdp?: string | undefined }>(
+  desc: T,
+  startKbps: number | null,
+): T {
+  if (desc.type === "rollback" || !desc.sdp || !startKbps) return desc;
+  return { ...desc, sdp: mungeVideoFmtp(desc.sdp, { "x-google-start-bitrate": Math.round(startKbps) }) };
+}
+
+/** Set (add or replace) fmtp parameters for every payload type whose rtpmap line matches `rtpmap` (group 1 = PT). */
+function mungeFmtp(sdp: string, rtpmap: RegExp, params: FmtpParams): string {
   if (!sdp) return sdp;
   const eol = eolOf(sdp);
   const lines = splitLines(sdp);
   const trailing = lines.length > 0 && lines[lines.length - 1] === "";
   if (trailing) lines.pop();
-  const pts = new Set(opusPayloadTypes(sdp));
+  const pts = new Set<string>();
+  for (const line of lines) {
+    const m = rtpmap.exec(line);
+    if (m) pts.add(m[1]!);
+  }
   if (pts.size === 0) return sdp;
 
   const apply = (existing: string): string => {
@@ -89,7 +128,7 @@ export function mungeOpusFmtp(sdp: string, params: FmtpParams): string {
   for (const line of out) {
     if (line.startsWith("m=")) section++;
     result.push(line);
-    const m = /^a=rtpmap:(\d+) opus\/48000/i.exec(line);
+    const m = rtpmap.exec(line);
     if (m && !seenFmtp.has(`${section}:${m[1]}`)) result.push(`a=fmtp:${m[1]} ${apply("")}`);
   }
   return result.join(eol) + (trailing ? eol : "");
@@ -133,7 +172,8 @@ export function sdpOrigin(sdp: string | undefined | null): string | null {
 export function mungeDescription<T extends { type: RTCSdpType; sdp?: string | undefined }>(
   desc: T,
   mode: AudioMode,
+  tuning: AudioTuning = {},
 ): T {
   if (desc.type === "rollback" || !desc.sdp) return desc;
-  return { ...desc, sdp: mungeOpusFmtp(desc.sdp, opusParamsFor(mode)) };
+  return { ...desc, sdp: mungeOpusFmtp(desc.sdp, opusParamsFor(mode, tuning)) };
 }

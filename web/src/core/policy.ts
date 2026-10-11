@@ -69,10 +69,25 @@ export function videoPolicy(input: VideoPolicyInput): VideoEncodeCaps {
   return { active, targetHeight, maxBitrate, maxFramerate: tier.maxFramerate, scaleResolutionDownBy };
 }
 
+/**
+ * Initial bandwidth estimate for a new connection (`x-google-start-bitrate`, kbps). libwebrtc starts at 300 kbps,
+ * which makes the encoder drop a 720p capture to a lower resolution and climb back slowly. Starting at the tier's
+ * cap lets the first frames go out at the target size; congestion control still backs off within ~1 s if the
+ * link can't carry it (W4 V2 data in ADR-0005).
+ */
+export function videoStartBitrateKbps(participants: number, override?: number): number | null {
+  if (override !== undefined) return override > 0 ? override : null;
+  return Math.round(tierFor(Math.max(1, participants)).maxBitrate / 1000);
+}
+
 export const AUDIO_BITRATE: Record<AudioMode, number> = { voice: 32_000, music: 96_000 };
 
-export function audioPolicy(mode: AudioMode): { maxBitrate: number } {
-  return { maxBitrate: AUDIO_BITRATE[mode] };
+export function audioPolicy(
+  mode: AudioMode,
+  tuning: { voiceBitrate?: number; musicBitrate?: number } = {},
+): { maxBitrate: number } {
+  const override = mode === "voice" ? tuning.voiceBitrate : tuning.musicBitrate;
+  return { maxBitrate: override ?? AUDIO_BITRATE[mode] };
 }
 
 /** What we tell a peer about how big we render its video. Our hidden tab ⇒ 0 (pause). */

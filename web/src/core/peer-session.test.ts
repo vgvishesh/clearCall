@@ -2,7 +2,7 @@ import type { SignalPayload } from "@clearcall/protocol";
 import { describe, expect, it } from "vitest";
 import type { CodecPrefs } from "./codecs.ts";
 import { type LocalTracks, type PeerRole, PeerSession } from "./peer-session.ts";
-import { readOpusFmtp } from "./sdp.ts";
+import { mungeVideoFmtp, readOpusFmtp } from "./sdp.ts";
 import { SerialQueue } from "./serial-queue.ts";
 import { advanceAndSettle, FakeClock, settle } from "./testing/fake-clock.ts";
 import { asFake, createFakeRtc, FakeMediaStream, FakeTrack } from "./testing/fake-webrtc.ts";
@@ -177,6 +177,18 @@ describe("PeerSession — newcomer offers, answerer reuses transceivers", () => 
     await settle();
     expectThreeMLines(a);
     expectThreeMLines(b);
+  });
+
+  it("puts the tier's video start bitrate on local and remote descriptions", async () => {
+    const { a, b } = setup();
+    await settle();
+    const start = (sdp: string) => /x-google-start-bitrate=(\d+)/.exec(sdp)?.[1];
+    const aPc = pcOf(a);
+    const bPc = pcOf(b);
+    expect(start(aPc.sdpLog.find((x) => x.dir === "local")!.sdp)).toBe("1500"); // 2 participants
+    expect(start(bPc.sdpLog.find((x) => x.dir === "remote")!.sdp)).toBe("1500");
+    expect(start(bPc.sdpLog.find((x) => x.dir === "local")!.sdp)).toBe("1500");
+    expect(mungeVideoFmtp(aPc.sdpLog[0]!.sdp, { "x-google-start-bitrate": 1500 })).toBe(aPc.sdpLog[0]!.sdp);
   });
 
   it("munges Opus fmtp on local and remote descriptions per our own mode", async () => {
@@ -542,5 +554,26 @@ describe("PeerSession — encode policy", () => {
     const none = setup({ codecPrefs: { red: false, videoOrder: null } });
     await settle();
     expect(pcOf(none.a).getTransceivers()[0]!.codecPreferences).toBeNull();
+  });
+
+  it("crossing a codec tier renegotiates (new order applies); within a tier it doesn't", async () => {
+    const { a, b } = setup({ codecPrefs: { red: false, videoOrder: null }, caps: true });
+    await settle();
+    const sdps = () =>
+      a.sent.filter((p) => p.k === "sdp").length + b.sent.filter((p) => p.k === "sdp").length;
+    const n0 = sdps();
+    a.s.setParticipants(4); // tier 2 → 4 (same tier as 3)
+    b.s.setParticipants(4);
+    await settle();
+    const n1 = sdps();
+    expect(n1).toBeGreaterThan(n0); // offer + answer (glare resolved by perfect negotiation)
+    a.s.setParticipants(3); // still tier 4
+    b.s.setParticipants(3);
+    await settle();
+    expect(sdps()).toBe(n1);
+    expect(pcOf(a).signalingState).toBe("stable");
+    expect(pcOf(b).signalingState).toBe("stable");
+    expectThreeMLines(a);
+    expectThreeMLines(b);
   });
 });

@@ -11,7 +11,7 @@ import { batch, signal } from "@preact/signals";
 import { SpeakerTracker } from "./active-speaker.ts";
 import { RemoteAudio } from "./audio-out.ts";
 import type { TimerHandle } from "./clock.ts";
-import { chooseVideoCodecOrder } from "./codecs.ts";
+import { chooseVideoCodecOrder, forcedVideoOrder } from "./codecs.ts";
 import { type CoreDeps, defaultDeps, type WakeLockLike } from "./deps.ts";
 import { createLog, errInfo, type LogSink, short } from "./log.ts";
 import { LocalMedia } from "./media.ts";
@@ -159,7 +159,9 @@ class Controller implements CallController {
     deps.window?.addEventListener("pagehide", this.onPageHide);
     deps.window?.addEventListener("online", this.onOnline);
     deps.document?.addEventListener("visibilitychange", this.onVisibility);
-    this.L.info("controller created", { qa: deps.flags.qa, red: deps.flags.red });
+    this.L.info("controller created", { qa: deps.flags.qa, red: deps.flags.red, audio: deps.flags.audio });
+    if (deps.flags.vcodec || deps.flags.vstart !== undefined)
+      this.L.info("video lab overrides", { vcodec: deps.flags.vcodec, vstart: deps.flags.vstart });
   }
 
   // ── state helpers ──
@@ -275,11 +277,14 @@ class Controller implements CallController {
     }
     if (gen !== this.generation) return;
 
-    this.videoOrder ??= chooseVideoCodecOrder(
-      d.getCapabilities("video")?.codecs,
-      d.mediaCapabilities,
-      this.log.scope("codecs"),
-    );
+    const forced = forcedVideoOrder(d.flags.vcodec); // lab bake-off only (`?vcodec=`)
+    this.videoOrder ??= forced
+      ? Promise.resolve(forced)
+      : chooseVideoCodecOrder(
+          d.getCapabilities("video")?.codecs,
+          d.mediaCapabilities,
+          this.log.scope("codecs"),
+        );
 
     this.media = new LocalMedia({
       mediaDevices: d.mediaDevices!,
@@ -289,6 +294,7 @@ class Controller implements CallController {
       ...(d.createAudioContext ? { createAudioContext: d.createAudioContext } : {}),
       ...(d.document ? { document: d.document } : {}),
       navigator: d.navigator,
+      ...(d.flags.audio ? { audioTuning: d.flags.audio } : {}),
       onTrack: (kind, track) => this.transport?.setLocalTrack(kind, track),
       onChange: () => {
         this.syncLocalFromMedia();
@@ -365,7 +371,7 @@ class Controller implements CallController {
         sourceShortSide: media?.sourceShortSide,
       }),
       announce: () => this.announce(),
-      codecPrefs: { red: d.flags.red, videoOrder },
+      codecPrefs: { red: d.flags.red, videoOrder, videoStartKbps: d.flags.vstart, audio: d.flags.audio },
       getCapabilities: d.getCapabilities,
       log: this.log.scope("peer"),
     });

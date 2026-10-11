@@ -6,6 +6,7 @@ import {
   rungFor,
   tierFor,
   videoPolicy,
+  videoStartBitrateKbps,
   viewChanged,
   viewToReport,
 } from "./policy.ts";
@@ -148,5 +149,17 @@ describe("encoding merges (read-modify-write)", () => {
     expect(a.encodings[0]!.maxBitrate).toBe(32_000);
     expect(mergeAudioEncoding(a, 32_000)).toBeNull();
     expect(mergeAudioEncoding(a, 96_000)!.encodings[0]!.maxBitrate).toBe(96_000);
+  });
+});
+
+describe("videoStartBitrateKbps", () => {
+  it("starts at the tier cap", () => {
+    expect(videoStartBitrateKbps(2)).toBe(tierFor(2).maxBitrate / 1000);
+    expect(videoStartBitrateKbps(4)).toBe(tierFor(4).maxBitrate / 1000);
+    expect(videoStartBitrateKbps(10)).toBe(tierFor(10).maxBitrate / 1000);
+  });
+  it("lab override wins; 0 = libwebrtc default (no munging)", () => {
+    expect(videoStartBitrateKbps(2, 800)).toBe(800);
+    expect(videoStartBitrateKbps(2, 0)).toBeNull();
   });
 });

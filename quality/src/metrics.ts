@@ -29,6 +29,8 @@ export interface RemoteSummary {
   /** concealedSamples / totalSamplesReceived over the window (audio). */
   concealment_ratio: number | null;
   audio_packets_lost: number | null;
+  /** Audio RTP payload+header bytes we sent to this remote, as kbps over the window (audio.bytesSent). */
+  audio_send_kbps: number | null;
   frames_decoded: number | null;
   fps_mean: number | null;
   frame_height_mean: number | null;
@@ -79,6 +81,18 @@ function delta(series: (number | undefined)[]): number | null {
   return v.length >= 2 ? v[v.length - 1]! - v[0]! : null;
 }
 
+/**
+ * Total increase of a cumulative counter that may restart (pc rebuilt after a signaling resume → new RTP stream,
+ * counter back near 0): positive steps are summed, a drop counts the new value as growth since the restart.
+ */
+export function increase(series: (number | undefined)[]): number | null {
+  const v = nums(series);
+  if (v.length < 2) return null;
+  let sum = 0;
+  for (let i = 1; i < v.length; i++) sum += v[i]! >= v[i - 1]! ? v[i]! - v[i - 1]! : v[i]!;
+  return sum;
+}
+
 function remoteSummary(id: string, rows: { t: number; p: QaPeerStats }[]): RemoteSummary {
   const span = rows.length >= 2 ? (rows[rows.length - 1]!.t - rows[0]!.t) / 1000 : 0;
   const freezeS = delta(rows.map((r) => r.p.video.totalFreezesDuration));
@@ -96,6 +110,9 @@ function remoteSummary(id: string, rows: { t: number; p: QaPeerStats }[]): Remot
     freeze_count: delta(rows.map((r) => r.p.video.freezeCount)),
     concealment_ratio: concealed !== null && received ? concealed / received : null,
     audio_packets_lost: delta(rows.map((r) => r.p.audio.packetsLost)),
+    audio_send_kbps: ((b) => (b !== null && span > 0 ? (b * 8) / 1000 / span : null))(
+      increase(rows.map((r) => r.p.audio.bytesSent)),
+    ),
     frames_decoded: delta(rows.map((r) => r.p.video.framesDecoded)),
     fps_mean: mean(nums(rows.map((r) => r.p.video.framesPerSecond))),
     frame_height_mean: mean(nums(rows.map((r) => r.p.video.frameHeight))),

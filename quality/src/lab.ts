@@ -2,8 +2,9 @@
  * Quality lab runner.
  *
  *   pnpm --filter @clearcall/quality lab --profile <name|all> [--netem] [--url http://localhost:8787]
- *        [--duration <s>] [--no-voice-baseline] [--keep-work]
- *   pnpm --filter @clearcall/quality lab --selftest [--seconds 20] [--kbps 1000] [--url …]   (no app needed)
+ *        [--duration <s>] [--no-voice-baseline] [--keep-work] [--flags "abr=40000&ns=0"] [--tag <label>]
+ *        [--participants N] [--shared-browser] [--viewport 390x844@3] [--latency] [--emulate-loss 5]
+ *   pnpm --filter @clearcall/quality lab --selftest [--seconds 20] [--kbps 1000] [--rec-kbps 8000] [--vcodec vp9] (no app needed)
  *
  * Per profile: N headless Chromium participants (one browser each) fed with reference media
  * (--use-file-for-fake-*-capture), driven through the UI testids with `?qa=1`; received media is recorded via the
@@ -14,7 +15,16 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Browser } from "@playwright/test";
 import { dnsmos, scoreMusic, scoreSpeech } from "./audio.ts";
+import {
+  type Envelope,
+  envelopeLatency,
+  type LatencyResult,
+  startEnvelope,
+  stopEnvelope,
+} from "./latency.ts";
+import { lossEmulation, lossEmuStats } from "./loss-emu.ts";
 import { adaptTimes, maxOrNull, mean, type QaStatsSample, sendSeries, summarizeTimeline } from "./metrics.ts";
 import {
   containerAppUrl,
@@ -27,7 +37,7 @@ import {
   stopPeerContainers,
   updateLink,
 } from "./netem.ts";
-import { cpuPct, Peer } from "./peers.ts";
+import { browserCpu, cpuPct, cpuPctBetween, launchSharedBrowser, Peer, parseViewport } from "./peers.ts";
 import { corpusFile, type MediaManifest, prepareMedia } from "./prepare-media.ts";
 import { changePoints, linkAt, listProfiles, loadProfile, type Profile } from "./profiles.ts";
 import {
@@ -42,12 +52,29 @@ import { evaluate, gatesFor, loadThresholds, type MetricValue } from "./threshol
 import { CACHE_DIR, ensureDir, log, parseArgs, REPORTS_DIR, ROOT_DIR, run, timestamp } from "./util.ts";
 import { scoreVideo } from "./video.ts";
 
+/** Above this many participants the lab uses one shared Chromium (host limit: never > 6 browser processes). */
+export const MAX_BROWSERS = 5;
+
 export interface LabOptions {
   appUrl: string;
   netem: boolean;
   durationOverride?: number;
   voiceBaseline: boolean;
   keepWork: boolean;
+  /** App URL flags for every participant (variant forcing, e.g. "red=1" or "abr=40000&dtx=0"). */
+  flags?: string;
+  /** Suffix for the report directory name (<ts>-<profile>-<tag>). */
+  tag?: string;
+  /** Override the profile's participant count (codec/policy tiers). */
+  participantsOverride?: number;
+  /** One Chromium with N contexts (forced on above MAX_BROWSERS; netem always uses one browser per container). */
+  sharedBrowser?: boolean;
+  /** Participant page viewport, e.g. "390x844@3" (phone portrait); default 960×600 @1. */
+  viewport?: string;
+  /** Run the audio latency probe (envelope correlation, src/latency.ts). */
+  latency?: boolean;
+  /** Emulate this % of Gilbert audio loss in the receivers when netem is unavailable (src/loss-emu.ts). */
+  emulateLoss?: number;
 }
 
 export interface SessionResult {
@@ -59,6 +86,10 @@ export interface SessionResult {
   errors: Record<string, string>;
   notes: string[];
   t0: number;
+  /** Whole-tree CPU of all local browsers during the measure window (% of one core). */
+  proc_cpu_pct?: number | null;
+  /** Audio capture→playout latency per direction ("p1_to_p0"), when --latency. */
+  latency?: Record<string, LatencyResult | null>;
 }
 
 export const errMsg = (e: unknown) =>
@@ -98,12 +129,15 @@ export async function runSession(
   const audioRef = corpusFile(profile.audio, media);
   const suffix = mode === profile.mode ? "" : `-${mode}`;
   const peers: Peer[] = [];
+  let shared: Browser | null = null;
   const containers: PeerContainer[] = [];
   const timers: NodeJS.Timeout[] = [];
   const results: PeerResult[] = [];
   const directions: DirectionResult[] = [];
   const timelines: Record<string, QaStatsSample[]> = {};
+  const latency: Record<string, LatencyResult | null> = {};
   let t0 = Date.now();
+  let procCpuPct: number | null = null;
   try {
     // ── launch ──
     let appUrl = opts.appUrl;
@@ -122,7 +156,19 @@ export async function runSession(
           "downlink (down_kbps) NOT shaped: ifb unavailable in the Docker VM kernel; uplink shaping only",
         );
     }
-    log(`launching ${n} participants (${opts.netem ? "netem containers" : "local, unshaped"}, ${mode} mode)`);
+    const emu = opts.emulateLoss ? lossEmulation(opts.emulateLoss, profile.seed) : null;
+    if (emu) {
+      extraArgs = [...extraArgs, ...emu.chromiumArgs];
+      notes.push(emu.note);
+    }
+    const useShared = !opts.netem && (opts.sharedBrowser || n > MAX_BROWSERS);
+    log(
+      `launching ${n} participants (${opts.netem ? "netem containers" : "local, unshaped"}, ${mode} mode${useShared ? ", one shared browser" : ""})`,
+    );
+    if (useShared) {
+      shared = await launchSharedBrowser(mediaPaths, extraArgs);
+      notes.push(`one shared Chromium with ${n} contexts (host browser-process limit)`);
+    }
     for (let i = 0; i < n; i++)
       peers.push(
         await Peer.launch({
@@ -130,6 +176,10 @@ export async function runSession(
           name: `P${i}`,
           media: mediaPaths,
           extraArgs,
+          ...(opts.flags ? { flags: opts.flags } : {}),
+          ...(parseViewport(opts.viewport) ? { viewport: parseViewport(opts.viewport)! } : {}),
+          ...(shared ? { browser: shared } : {}),
+          ...(emu ? { initScript: emu.initScript, bypassCSP: true } : {}),
           ...(containers[i] ? { wsEndpoint: containers[i]!.wsEndpoint } : {}),
         }),
       );
@@ -156,6 +206,7 @@ export async function runSession(
     // ── measure ──
     t0 = Date.now();
     const cpu0 = await Promise.all(peers.map((p) => p.cpuMetrics()));
+    const proc0 = await browserCpu();
     for (const at of changePoints(profile))
       timers.push(
         setTimeout(() => {
@@ -181,6 +232,16 @@ export async function runSession(
         errors[`recording_${pr.from.label}_to_${pr.to.label}`] = errMsg(e);
       });
 
+    if (opts.latency)
+      for (const pr of pairs) {
+        const key = `${pr.from.label}_to_${pr.to.label}`;
+        await startEnvelope(pr.from.page, `tx-${key}`, "local").catch((e) => {
+          errors[`latency_${key}`] = errMsg(e);
+        });
+        await startEnvelope(pr.to.page, `rx-${key}`, pr.remoteId).catch((e) => {
+          errors[`latency_${key}`] = errMsg(e);
+        });
+      }
     log(`measuring for ${duration} s`);
     const end = t0 + duration * 1000;
     while (Date.now() < end) {
@@ -188,8 +249,19 @@ export async function runSession(
       for (const p of peers) if (p.page.isClosed()) throw new Error(`${p.label} page closed/crashed`);
     }
     const cpu1 = await Promise.all(peers.map((p) => p.cpuMetrics()));
+    procCpuPct = cpuPctBetween(proc0, await browserCpu());
 
     // ── collect ──
+    if (opts.latency)
+      for (const pr of pairs) {
+        const key = `${pr.from.label}_to_${pr.to.label}`;
+        const tx = await stopEnvelope(pr.from.page, `tx-${key}`);
+        const rx = await stopEnvelope(pr.to.page, `rx-${key}`);
+        if (tx && rx)
+          writeFileSync(join(outDir, `envelopes-${key}${suffix}.json`), JSON.stringify({ tx, rx }));
+        latency[key] = tx && rx ? envelopeLatency(tx as Envelope, rx as Envelope) : null;
+        if (!latency[key]) errors[`latency_${key}`] ??= "no envelope correlation";
+      }
     for (const pr of pairs) {
       const key = `${pr.from.label}_to_${pr.to.label}`;
       const buf = await pr.to.stopRecording(pr.remoteId).catch((e) => {
@@ -203,6 +275,16 @@ export async function runSession(
       } else errors[`recording_${key}`] ??= "empty recording";
       directions.push(dir);
     }
+    if (emu)
+      for (const p of peers) {
+        const st = await lossEmuStats(p.page);
+        if (!st || st.error || !st.frames)
+          errors[`loss_emulation_${p.label}`] = st?.error ?? "no frames seen";
+        else
+          notes.push(
+            `${p.label}: emulated audio loss ${((100 * st.dropped) / st.frames).toFixed(2)} % (${st.dropped}/${st.frames} frames)`,
+          );
+      }
     for (const [i, p] of peers.entries()) {
       const pd = ensureDir(join(outDir, `${p.label}${suffix}`));
       const tl = await p.timeline();
@@ -234,9 +316,21 @@ export async function runSession(
   } finally {
     for (const t of timers) clearTimeout(t);
     await Promise.all(peers.map((p) => p.close()));
+    await shared?.close().catch(() => {});
     if (containers.length) await stopPeerContainers(containers);
   }
-  return { started, finished: new Date(), peers: results, directions, timelines, errors, notes, t0 };
+  return {
+    started,
+    finished: new Date(),
+    peers: results,
+    directions,
+    timelines,
+    errors,
+    notes,
+    t0,
+    proc_cpu_pct: procCpuPct,
+    ...(opts.latency ? { latency } : {}),
+  };
 }
 
 export async function scoreDirections(
@@ -267,7 +361,7 @@ export async function scoreDirections(
 /** Aggregate session results into gate metrics (worst direction / worst participant). Pure. */
 export function buildMetrics(
   profile: Profile,
-  s: Pick<SessionResult, "peers" | "directions" | "t0" | "timelines">,
+  s: Pick<SessionResult, "peers" | "directions" | "t0" | "timelines" | "proc_cpu_pct">,
 ): { metrics: Record<string, MetricValue>; errors: Record<string, string> } {
   const m: Record<string, MetricValue> = {};
   const errors: Record<string, string> = {};
@@ -353,12 +447,22 @@ export function buildMetrics(
     m.kbps = maxOrNull(P.map((p) => p.summary.total_kbps_mean));
     m.kbps_p95 = maxOrNull(P.map((p) => p.summary.total_kbps_p95));
     m.send_kbps = maxOrNull(P.map((p) => p.summary.send_kbps_mean));
+    m.audio_kbps = maxOrNull(P.map((p) => maxOrNull(p.summary.remotes.map((r) => r.audio_send_kbps))));
     m.freeze_ratio = maxOrNull(P.map((p) => p.summary.freeze_ratio_max));
     m.audio_concealment_ratio = maxOrNull(P.map((p) => p.summary.concealment_ratio_max));
     m.time_to_first_frame_ms = maxOrNull(P.map((p) => p.first_frame_ms));
     m.cpu_pct = maxOrNull(P.map((p) => p.cpu_pct));
     m.rtt_ms = mean(P.map((p) => p.summary.rtt_ms_mean).filter((x): x is number => x !== null));
     m.encode_ms = maxOrNull(P.map((p) => p.summary.encode_ms_mean));
+    // Received resolution: the worst remote anyone decodes (mesh tiers scale per receiver view).
+    const heights = P.flatMap((p) => p.summary.remotes.map((r) => r.frame_height_mean)).filter(
+      (h): h is number => typeof h === "number",
+    );
+    if (heights.length) m.frame_height = Math.min(...heights);
+    if (s.proc_cpu_pct !== undefined && s.proc_cpu_pct !== null) {
+      m.proc_cpu_pct = s.proc_cpu_pct;
+      m.proc_cpu_pct_per_peer = s.proc_cpu_pct / P.length;
+    }
   }
   m.setup_success_rate = P.filter((p) => p.connected_ms !== null).length / profile.participants;
 
@@ -381,11 +485,13 @@ async function gitInfo(): Promise<{ commit: string; dirty: boolean }> {
 }
 
 export async function runProfile(name: string, opts: LabOptions): Promise<LabReport> {
-  const profile = loadProfile(name);
+  const loaded = loadProfile(name);
+  const n = opts.participantsOverride ?? loaded.participants;
+  const profile: Profile = { ...loaded, participants: n, topology: n > 2 ? "mesh" : loaded.topology };
   const thresholds = loadThresholds();
   const media = await prepareMedia();
   const ts = timestamp();
-  const outDir = ensureDir(join(REPORTS_DIR, `${ts}-${name}`));
+  const outDir = ensureDir(join(REPORTS_DIR, `${ts}-${name}${opts.tag ? `-${opts.tag}` : ""}`));
   const workDir = join(CACHE_DIR, "work", `${ts}-${name}`);
   log(`profile ${name} → ${outDir} (${thresholds.source} thresholds)`);
   if (opts.netem) {
@@ -395,6 +501,7 @@ export async function runProfile(name: string, opts: LabOptions): Promise<LabRep
 
   const s = await runSession(profile, profile.mode, media, opts, outDir);
   const notes = [...s.notes];
+  if (opts.flags) notes.push(`app URL flags: ${opts.flags}`);
   const errors = { ...s.errors };
   await scoreDirections(s.directions, profile, media, workDir);
   const { metrics, errors: scoreErrors } = buildMetrics(profile, s);
@@ -419,6 +526,24 @@ export async function runProfile(name: string, opts: LabOptions): Promise<LabRep
       else errors.music_mode_better_than_voice = "music or voice-mode music score missing";
     }
   }
+  if (s.latency) {
+    const ok = Object.entries(s.latency).filter(
+      (e): e is [string, LatencyResult] => !!e[1] && e[1].corr >= 0.5,
+    );
+    if (ok.length) {
+      metrics.audio_latency_ms = Math.max(...ok.map(([, r]) => r.latency_ms));
+      // thresholds: mouth-to-ear EXCLUDING the profile's configured one-way network delay (applied only with --netem)
+      metrics.audio_mouth_to_ear_ms = metrics.audio_latency_ms - (opts.netem ? profile.link.delay_ms : 0);
+    } else errors.audio_mouth_to_ear_ms = "latency probe: no trustworthy correlation (corr < 0.5)";
+    for (const [k, r] of Object.entries(s.latency))
+      if (r)
+        notes.push(
+          `latency ${k}: ${r.latency_ms.toFixed(1)} ms (corr ${r.corr.toFixed(2)}; 10 s windows ${r.windows.map((w) => w.toFixed(0)).join("/")})`,
+        );
+    notes.push(
+      "audio latency = capture (after APM) → remote playout input, envelope cross-correlation on a shared clock; excludes physical mic/speaker buffers",
+    );
+  }
   if (errors.session) {
     // Nothing meaningful was measured: every unmeasured gate becomes an error so the run fails loudly.
     for (const k of Object.keys(gatesFor(thresholds, name))) {
@@ -427,12 +552,15 @@ export async function runProfile(name: string, opts: LabOptions): Promise<LabRep
         errors[metric] ??= `session failed: ${errors.session}`;
     }
   }
-  notes.push("audio_mouth_to_ear_ms is not measured yet (needs a coded-chirp latency probe)");
+  if (!opts.latency) notes.push("audio_mouth_to_ear_ms not measured (run with --latency)");
   notes.push(
     "cpu_pct = renderer main-thread task time (CDP TaskDuration) as % of one core, not whole-process CPU",
   );
   if (profile.participants > 2)
     notes.push("media is scored for the p0⇄p1 pair only; other pairs are covered by stats");
+  if (opts.viewport) notes.push(`viewport ${opts.viewport}`);
+  if (opts.participantsOverride !== undefined && opts.participantsOverride !== loaded.participants)
+    notes.push(`participants overridden: ${loaded.participants} → ${n}`);
   if (media.synthetic)
     notes.push(
       "synthetic corpus (prepare-media); owner media in reference-media/<corpus>.{wav,y4m} is used when present",
@@ -487,6 +615,11 @@ async function main() {
         seconds: Number(a.get("seconds") ?? 20),
         kbps: Number(a.get("kbps") ?? 1000),
         appUrl: appUrlFrom(a),
+        ...(a.get("rec-kbps") ? { recKbps: Number(a.get("rec-kbps")) } : {}),
+        ...(a.get("vcodec") ? { vcodec: a.get("vcodec") } : {}),
+        ...(a.get("scale") ? { scale: Number(a.get("scale")) } : {}),
+        ...(a.get("fps") ? { fps: Number(a.get("fps")) } : {}),
+        ...(a.get("warmup") ? { warmup: Number(a.get("warmup")) } : {}),
       }),
     );
   }
@@ -502,7 +635,14 @@ async function main() {
     netem: a.has("netem"),
     voiceBaseline: !a.has("no-voice-baseline"),
     keepWork: a.has("keep-work"),
+    ...(a.get("flags") ? { flags: a.get("flags")! } : {}),
+    ...(a.get("tag") ? { tag: a.get("tag")! } : {}),
+    latency: a.has("latency"),
+    ...(a.get("emulate-loss") ? { emulateLoss: Number(a.get("emulate-loss")) } : {}),
     ...(a.get("duration") ? { durationOverride: Number(a.get("duration")) } : {}),
+    ...(a.get("participants") ? { participantsOverride: Number(a.get("participants")) } : {}),
+    ...(a.has("shared-browser") ? { sharedBrowser: true } : {}),
+    ...(a.get("viewport") ? { viewport: a.get("viewport")! } : {}),
   };
   if (!opts.netem) log("UNSHAPED run (no --netem): network profile values are not enforced");
   const names = which === "all" ? listProfiles() : [which];

@@ -4,7 +4,10 @@
  * the received stream (same recording path as the QA hook), then the real scorers. Proves capture → WebRTC →
  * recording → alignment → VMAF/PESQ/DNSMOS end-to-end. Writes quality/reports/<ts>-selftest/.
  *
- *   pnpm --filter @clearcall/quality lab --selftest [--seconds 20] [--kbps 1000]
+ *   pnpm --filter @clearcall/quality lab --selftest [--seconds 20] [--kbps 1000] [--rec-kbps 8000] [--vcodec vp9]
+ *        [--scale 2] [--fps 15] [--warmup 6]
+ * --scale/--fps = scaleResolutionDownBy/maxFramerate (policy ladder rungs); --warmup = seconds of call before recording
+ * starts (skips the congestion-control ramp so a bitrate point measures that bitrate). sent_kbps is over the recording.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +23,28 @@ declare global {
   }
 }
 
-export async function selftest(o: { seconds: number; kbps: number; appUrl: string }): Promise<number> {
+const pick = (o: Record<string, unknown> | undefined, keys: string[]) =>
+  Object.fromEntries(keys.map((k) => [k, o?.[k]]));
+
+export interface SelftestOptions {
+  seconds: number;
+  /** WebRTC video maxBitrate (kbps). */
+  kbps: number;
+  appUrl: string;
+  /** MediaRecorder video bitrate (kbps) — the recording is a second lossy generation; keep it far above `kbps`. */
+  recKbps?: number;
+  /** Force the WebRTC video codec (vp8|vp9|h264|av1); default = browser order. */
+  vcodec?: string;
+  /** RTCRtpEncodingParameters.scaleResolutionDownBy (1 = source 360p). */
+  scale?: number;
+  /** RTCRtpEncodingParameters.maxFramerate. */
+  fps?: number;
+  /** Seconds of call before recording starts. */
+  warmup?: number;
+}
+
+export async function selftest(o: SelftestOptions): Promise<number> {
+  const recKbps = o.recKbps ?? 8000;
   const media = await prepareMedia();
   const video = corpusFile("talking_head", media);
   const audio = corpusFile("speech_clean", media);
@@ -31,7 +55,7 @@ export async function selftest(o: { seconds: number; kbps: number; appUrl: strin
     await peer.page.goto(`${o.appUrl}/api/health`).catch(() => peer.page.goto("about:blank"));
     log(`loopback call for ${o.seconds} s at ${o.kbps} kbps video`);
     const info = await peer.page.evaluate(
-      async ({ seconds, kbps }) => {
+      async ({ seconds, kbps, recKbps, vcodec, scale, fps, warmup }) => {
         const local = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
           video: { width: 640, height: 360, frameRate: 30 },
@@ -47,7 +71,15 @@ export async function selftest(o: { seconds: number; kbps: number; appUrl: strin
             if (remote.getTracks().length === 2) res();
           };
         });
-        for (const t of local.getTracks()) a.addTrack(t, local);
+        for (const t of local.getTracks()) {
+          const tx = a.addTransceiver(t, { direction: "sendonly", streams: [local] });
+          if (t.kind === "video" && vcodec) {
+            const all = RTCRtpReceiver.getCapabilities("video")?.codecs ?? [];
+            const want = all.filter((c) => c.mimeType.toLowerCase() === `video/${vcodec}`);
+            if (!want.length) throw new Error(`codec ${vcodec} not available`);
+            tx.setCodecPreferences([...want, ...all.filter((c) => !want.includes(c))]);
+          }
+        }
         await a.setLocalDescription();
         await b.setRemoteDescription(a.localDescription!);
         await b.setLocalDescription();
@@ -55,6 +87,8 @@ export async function selftest(o: { seconds: number; kbps: number; appUrl: strin
         const vs = a.getSenders().find((s) => s.track?.kind === "video")!;
         const p = vs.getParameters();
         p.encodings[0]!.maxBitrate = kbps * 1000;
+        if (scale > 1) p.encodings[0]!.scaleResolutionDownBy = scale;
+        if (fps > 0) p.encodings[0]!.maxFramerate = fps;
         await vs.setParameters(p);
         await gotTracks;
         // Audio must be pulled by a sink for the receive pipeline to run in headless Chromium.
@@ -62,29 +96,65 @@ export async function selftest(o: { seconds: number; kbps: number; appUrl: strin
         el.srcObject = remote;
         el.muted = true;
         await el.play().catch(() => {});
+        await new Promise((r) => setTimeout(r, warmup * 1000));
+        // Inline snapshots (no named helper): tsx/esbuild keepNames would inject `__name`, undefined in the page.
+        const s0 = { bytes: 0, enc: 0, frames: 0, t: performance.now() };
+        (await a.getStats()).forEach((x) => {
+          if (x.type === "outbound-rtp" && x.kind === "video")
+            Object.assign(s0, {
+              bytes: x.bytesSent,
+              enc: x.totalEncodeTime ?? 0,
+              frames: x.framesEncoded ?? 0,
+            });
+        });
         const rec = new MediaRecorder(remote, {
           mimeType: "video/webm;codecs=vp8,opus",
-          videoBitsPerSecond: 8_000_000,
+          videoBitsPerSecond: recKbps * 1000,
           audioBitsPerSecond: 256_000,
         });
         const chunks: Blob[] = [];
         rec.ondataavailable = (e) => chunks.push(e.data);
         rec.start(1000);
         await new Promise((r) => setTimeout(r, seconds * 1000));
+        const stopped = new Promise((r) => (rec.onstop = r)); // before stop(): onstop may fire during getStats
         rec.stop();
-        await new Promise((r) => (rec.onstop = r));
+        const s1 = { bytes: 0, enc: 0, frames: 0, t: performance.now() };
+        (await a.getStats()).forEach((x) => {
+          if (x.type === "outbound-rtp" && x.kind === "video")
+            Object.assign(s1, {
+              bytes: x.bytesSent,
+              enc: x.totalEncodeTime ?? 0,
+              frames: x.framesEncoded ?? 0,
+            });
+        });
+        await stopped;
+        const window_ = {
+          kbps: ((s1.bytes - s0.bytes) * 8) / (s1.t - s0.t),
+          encode_ms: s1.frames > s0.frames ? ((s1.enc - s0.enc) * 1000) / (s1.frames - s0.frames) : null,
+          fps: ((s1.frames - s0.frames) * 1000) / (s1.t - s0.t),
+        };
         window.__selftestBlob = new Blob(chunks, { type: "video/webm" });
-        const stats: Record<string, unknown> = {};
+        const stats: Record<string, Record<string, unknown>> = {};
         (await b.getStats()).forEach((s) => {
           if (s.type === "inbound-rtp") stats[s.kind] = s;
         });
-        (await a.getStats()).forEach((s) => {
-          if (s.type === "outbound-rtp") stats[`out-${s.kind}`] = s;
+        const sa = await a.getStats();
+        sa.forEach((s) => {
+          if (s.type === "outbound-rtp")
+            stats[`out-${s.kind}`] = { ...s, codec: s.codecId ? sa.get(s.codecId)?.mimeType : undefined };
         });
         const settings = local.getVideoTracks()[0]!.getSettings();
-        return { size: window.__selftestBlob.size, stats, settings };
+        return { size: window.__selftestBlob.size, stats, settings, window: window_ };
       },
-      { seconds: o.seconds, kbps: o.kbps },
+      {
+        seconds: o.seconds,
+        kbps: o.kbps,
+        recKbps,
+        vcodec: o.vcodec?.toLowerCase() ?? "",
+        scale: o.scale ?? 1,
+        fps: o.fps ?? 0,
+        warmup: o.warmup ?? 0,
+      },
     );
     const b64 = await peer.page.evaluate(async () => {
       const bytes = new Uint8Array(await window.__selftestBlob!.arrayBuffer());
@@ -104,6 +174,12 @@ export async function selftest(o: { seconds: number; kbps: number; appUrl: strin
     const d = await dnsmos(rec, join(work, "dnsmos"));
     const result = {
       kbps_cap: o.kbps,
+      rec_kbps: recKbps,
+      vcodec: o.vcodec ?? "default",
+      scale: o.scale ?? 1,
+      fps_cap: o.fps ?? null,
+      warmup: o.warmup ?? 0,
+      window: info.window,
       seconds: o.seconds,
       capture: info.settings,
       video: v,
@@ -115,6 +191,22 @@ export async function selftest(o: { seconds: number; kbps: number; appUrl: strin
     console.log(
       JSON.stringify(
         {
+          kbps_cap: o.kbps,
+          rec_kbps: recKbps,
+          vcodec: o.vcodec ?? "default",
+          sent: pick(info.stats["out-video"], [
+            "codec",
+            "encoderImplementation",
+            "frameHeight",
+            "framesPerSecond",
+            "qualityLimitationReason",
+          ]),
+          scale: o.scale ?? 1,
+          fps_cap: o.fps ?? null,
+          warmup: o.warmup ?? 0,
+          sent_kbps: Math.round(info.window.kbps),
+          sent_fps: Math.round(info.window.fps * 10) / 10,
+          encode_ms: info.window.encode_ms,
           vmaf: v.vmaf_mean,
           vmaf_p5: v.vmaf_p5,
           frames: v.frames_scored,
