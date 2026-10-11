@@ -9,6 +9,8 @@ fail_out=""; rc=0
 # Entries are "<checkout>|<relative path>"; verify each checkout (main tree or worktree) for its touched areas.
 while IFS= read -r top; do
   [[ -d "$top" ]] || continue
+  # Worktree agents verify their own checkouts; their in-progress state must not block the orchestrator.
+  [[ "$top" == */.claude/worktrees/* ]] && continue
   areas=$( { grep -F "$top|" "$list" | cut -d'|' -f2 | cut -d/ -f1 | grep -Ex 'web|signaling|protocol|quality|e2e'
              grep -F "$top|" "$list" | cut -d'|' -f2 | grep -Eq '^(\.claude/hooks/|scripts/)' && echo harness; } | sort -u | tr '\n' ' ')
   [[ -n "$areas" ]] || continue

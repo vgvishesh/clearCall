@@ -29,5 +29,6 @@
   { "t": "peer-left", "peerId": "BBBBBBBBBBBBBBBB", "reason": "timeout" },
   { "t": "signal", "from": "BBBBBBBBBBBBBBBB", "data": "Y2lwaGVydGV4dA" },
   { "t": "error", "code": "room-full" },
+  { "t": "error", "code": "unknown-peer", "peerId": "BBBBBBBBBBBBBBBB" },
   { "t": "error", "code": "version", "message": "Please reload" }
 ]

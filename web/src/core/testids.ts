@@ -1,6 +1,12 @@
 /**
  * data-testid values — the contract between the UI and E2E tests.
- * Per-participant elements also carry data-participant-id, data-name, data-status, data-mic, data-cam.
+ *
+ * Per-participant tiles (participant-tile, self-tile) also carry data attributes:
+ * - data-participant-id: the remote peer id; the self tile always has data-participant-id="self".
+ * - data-name: display name ("" until known).
+ * - data-status: the peer connection status (PeerConnectionStatus: connecting | connected | reconnecting | failed;
+ *   always "connected" on the self tile).
+ * - data-mic, data-cam: "true" | "false" — whether that participant's mic / camera is on.
  */
 export const TID = {
   // Home
@@ -13,6 +19,8 @@ export const TID = {
   joinButton: "join-button",
   lobbyPreview: "lobby-preview",
   micLevel: "mic-level",
+  /** Lobby: "Try again" after camera/mic were blocked or missing. */
+  retryMedia: "retry-media",
   // Call
   callScreen: "call-screen",
   participantTile: "participant-tile",
@@ -28,14 +36,19 @@ export const TID = {
   reconnectingBanner: "reconnecting-banner",
   enableAudio: "enable-audio",
   retryPeer: "retry-peer",
+  /** Close button of a bottom sheet / panel (e.g. the More sheet). */
+  sheetClose: "sheet-close",
   // Ended / errors
   endedScreen: "ended-screen",
   rejoinButton: "rejoin-button",
   newCallButton: "new-call-button",
   errorScreen: "error-screen",
   errorCode: "error-code",
+  /** Error screen's primary recovery button (Try again / Reload). The Ended screen's Rejoin stays rejoinButton. */
+  errorAction: "error-action",
   // PWA
   installHint: "install-hint",
+  installHintDismiss: "install-hint-dismiss",
 } as const;
 
 export type TestId = (typeof TID)[keyof typeof TID];

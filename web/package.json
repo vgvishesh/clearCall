@@ -17,6 +17,7 @@
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
     "@testing-library/preact": "^3.2.4",
+    "@vite-pwa/assets-generator": "^2.0.0",
     "happy-dom": "^20.14.6",
     "vite": "^8.3.4",
     "vite-plugin-pwa": "^2.0.0",

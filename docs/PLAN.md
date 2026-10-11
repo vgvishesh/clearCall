@@ -6,12 +6,13 @@ Per-feature plans: `docs/plans/<slug>.md`.
 ## Milestones
 | # | Milestone | Exit criteria | Status |
 |---|---|---|---|
-| W0 | Harness + workspace + contracts | web-focused hooks/skills/agents; pnpm workspace builds; `protocol/` + `web/src/core/types.ts` agreed | in progress |
-| W1 | Parallel build | signaling Worker · WebRTC core · UI/PWA shell (on FakeCallController) · E2E + lab scaffolding — each green on its branch | todo |
-| W2 | Integration: first real call | 2 Chromium peers call each other via `make dev`; `make e2e` 2/3/4-party green | todo |
-| W3 | Robustness | reconnect/resume, ICE restart, room full, permissions errors, 10-party E2E, WebKit + Firefox E2E | todo |
-| W4 | Quality | lab runs bot↔bot on all profiles; music mode; codec/RED decisions from data; thresholds adopted | todo |
+| W0 | Harness + workspace + contracts | web-focused hooks/skills/agents; pnpm workspace builds; `protocol/` + `web/src/core/types.ts` agreed | done |
+| W1 | Parallel build | signaling Worker · WebRTC core · UI/PWA shell (on FakeCallController) · E2E + lab + diag — each green on its branch | done |
+| W2 | Integration: first real call | 2 Chromium peers call each other via `make dev`; `make e2e` 2/3/4-party green | done |
+| W3 | Robustness | reconnect/resume, ICE restart, room full, permissions errors, 10-party E2E, WebKit + Firefox E2E | mostly done (ghost-peer + cam-mute fix in progress) |
+| W4 | Quality | lab runs on all profiles; music mode; codec/RED/start-bitrate decisions from data; thresholds revised + adopted | next |
 | W5 | Owner device test + deploy | owner `wrangler login`; staging deploy; iPhone + Android real-device checklist incl. background-audio spike | todo |
+| W5b | SFU transport (ADR-0006) | Cloudflare Realtime SfuTransport behind MediaTransport; room switches mesh→SFU under load; group_10 gates | todo (needs owner Cloudflare Realtime creds) |
 | W6 | V1.1 | ML noise suppression (if lab proves it), install hint polish, ringing via Web Push (design TBD) | todo |
 
 ## Open decisions (owner)
@@ -20,3 +21,5 @@ Per-feature plans: `docs/plans/<slug>.md`.
 
 ## Log
 - 2026-10-11 — Harness scaffolded (native-first), then refocused to web-only V1. Name: Clearcall. Style: dark, calm, minimal. Local git only.
+- 2026-10-11 — Plan review (7 blockers fixed in contracts); owner asked for squash-merge policy, full agent autonomy + observability, hybrid mesh/SFU (ADR-0006). W1 agents launched from 6ef1f12.
+- 2026-10-11 — V1 core squash-merged: real 2–10 party calls, 17/17 Chromium E2E (+Firefox/WebKit 2–3 party), diag N=4 0 hard anomalies, first quality report (good_wifi unshaped: VMAF 81.5, DNSMOS BAK 2.48→3.68 from NS, TTFF 848 ms). Threshold compliance moved to W4 (proposed PESQ/kbps gates need revision).

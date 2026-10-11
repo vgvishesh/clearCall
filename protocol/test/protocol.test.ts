@@ -12,6 +12,7 @@ import {
   isValidRoomId,
   parseCallLink,
   parseClientMessage,
+  parseDevLogBatch,
   parsePeerMessage,
   parseServerMessage,
   parseSignalPayload,
@@ -26,6 +27,7 @@ const parsers = {
   server: parseServerMessage,
   "signal-payload": parseSignalPayload,
   "peer-message": parsePeerMessage,
+  "dev-log": parseDevLogBatch,
 } as const;
 
 describe("fixtures", () => {

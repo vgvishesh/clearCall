@@ -29,6 +29,30 @@ export const BLOB_RE = /^[A-Za-z0-9_-]+$/;
 
 export const MAX_NAME_LENGTH = 40;
 
+/**
+ * WebSocket close codes sent by the Room DO. Codes not listed (e.g. 1006) mean "connection lost":
+ * reconnect with `join{resume:true}`.
+ */
+export const CLOSE = {
+  /** After the client's own `leave`. */
+  LEFT: 1000,
+  /** After `error{room-full}`. Fatal. */
+  ROOM_FULL: 4001,
+  /** After `error{version}`. Fatal: reload the app. */
+  VERSION: 4002,
+  /** After `error{duplicate-peer}`. Fatal. */
+  DUPLICATE_PEER: 4003,
+  /** A newer socket resumed this peerId. Do NOT reconnect (it would fight the newer socket). */
+  REPLACED: 4004,
+  /** Sustained rate-limit abuse. Peer marked away; may resume. */
+  ABUSE: 4005,
+  /** No heartbeat/message for > 4 × HEARTBEAT_INTERVAL_MS. Peer marked away; may resume. */
+  DEAD: 4006,
+} as const;
+
+/** Server→client frames may exceed MAX_MESSAGE_BYTES slightly (relayed `from` vs `to`); parsers allow this headroom. */
+export const SERVER_FRAME_HEADROOM_BYTES = 256;
+
 // ───────────────────────────── 1. Client ⇄ Server ─────────────────────────────
 
 export type ClientMessage =
@@ -61,8 +85,11 @@ export type ServerMessage =
   | { t: "peer-joined"; peerId: string }
   | { t: "peer-left"; peerId: string; reason: "left" | "timeout" }
   | { t: "signal"; from: string; data: string }
-  /** Fatal codes (room-full, version, duplicate-peer) are followed by the server closing the socket. */
-  | { t: "error"; code: ErrorCode; message?: string };
+  /**
+   * Fatal codes (room-full, version, duplicate-peer) are followed by the server closing the socket.
+   * `peerId` is set for `unknown-peer` (the signal target that isn't in the room) so the sender can drop that pair.
+   */
+  | { t: "error"; code: ErrorCode; message?: string; peerId?: string };
 
 // ─────────────────────── 2. Peer ⇄ Peer, encrypted via the server ───────────────────────
 
@@ -112,9 +139,9 @@ const isBlob = (x: unknown): x is string =>
   isStr(x) && x.length > 0 && x.length <= MAX_MESSAGE_BYTES && BLOB_RE.test(x);
 const isName = (x: unknown): x is string => isStr(x) && x.length <= MAX_NAME_LENGTH;
 
-function parseJson(raw: unknown): unknown {
+function parseJson(raw: unknown, maxBytes = MAX_MESSAGE_BYTES): unknown {
   if (isObj(raw)) return raw;
-  if (!isStr(raw) || raw.length > MAX_MESSAGE_BYTES) return null;
+  if (!isStr(raw) || raw.length > maxBytes) return null;
   try {
     return JSON.parse(raw);
   } catch {
@@ -162,7 +189,7 @@ function isIceServer(x: unknown): x is IceServer {
 }
 
 export function parseServerMessage(raw: unknown): ServerMessage | null {
-  const m = parseJson(raw);
+  const m = parseJson(raw, MAX_MESSAGE_BYTES + SERVER_FRAME_HEADROOM_BYTES);
   if (!isObj(m)) return null;
   switch (m.t) {
     case "welcome":
@@ -186,7 +213,12 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
       return isPeerId(m.from) && isBlob(m.data) ? { t: "signal", from: m.from, data: m.data } : null;
     case "error":
       if (!ERROR_CODES.includes(m.code as ErrorCode)) return null;
-      return { t: "error", code: m.code as ErrorCode, ...(isStr(m.message) ? { message: m.message } : {}) };
+      return {
+        t: "error",
+        code: m.code as ErrorCode,
+        ...(isStr(m.message) ? { message: m.message } : {}),
+        ...(isPeerId(m.peerId) ? { peerId: m.peerId } : {}),
+      };
     default:
       return null;
   }

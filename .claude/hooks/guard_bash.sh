@@ -33,6 +33,14 @@ if grep -Eq '^\s*git\s+(-C\s+\S+\s+)?commit\b' <<<"$segs"; then
     decide deny "Commit policy: don't commit directly on $branch. Create a branch first: git switch -c feat/<slug> (or fix/, chore/, test/, docs/), commit there, and squash-merge into main when tests pass (git merge --squash <branch> && git commit)."
   fi
 fi
+# Disk guard: image pulls/builds once filled the shared disk. Require headroom (MIN_FREE_GB, default 15).
+if grep -Eq 'docker\s+(build|pull|buildx\s+build|compose\s+.*(build|up|pull)|run\s)' <<<"$cmd"; then
+  free_gb=$(df -g / 2>/dev/null | awk 'NR==2{print $4}')
+  if [[ -n "$free_gb" && "$free_gb" -lt "${MIN_FREE_GB:-15}" ]]; then
+    decide deny "Only ${free_gb} GB free on / (need ≥ ${MIN_FREE_GB:-15} GB) — Docker image pulls/builds can fill the shared disk. Don't prune the owner's images or caches; report to the owner instead."
+  fi
+fi
+grep -Eq 'docker\s+(system|builder|image|volume|container)\s+prune|docker\s+(rmi|volume\s+rm)' <<<"$cmd" && decide ask "Pruning/removing Docker images, caches or volumes can delete the owner's data on this shared machine."
 grep -Eq 'cloudflared\s+tunnel' <<<"$cmd" && decide ask "A tunnel exposes the local dev server on a public URL."
 grep -Eq 'wrangler\s+deploy' <<<"$cmd" && ! grep -Eq -- '--env\s+staging' <<<"$cmd" && decide ask "Deploying the signaling Worker outside staging affects real users."
 grep -Eq 'wrangler\s+secret|wrangler\s+(kv|d1|r2)\s+.*(delete|purge)' <<<"$cmd" && decide ask "Changing Cloudflare secrets/data."

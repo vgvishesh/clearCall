@@ -1,0 +1,5 @@
+[
+  { "entries": [] },
+  { "peer": "AAAAAAAAAAAAAAAA", "entries": [{ "t": 1, "level": "loud", "scope": "x", "msg": "y" }] },
+  { "peer": "AAAAAAAAAAAAAAAA", "entries": "nope" }
+]

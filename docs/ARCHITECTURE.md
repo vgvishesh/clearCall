@@ -45,6 +45,17 @@ One deployable: the Worker serves the app and signaling from the same origin (no
   Further capped by the receiver's `view` message (don't send 720p to a 120 px tile) and by `degradationPreference="balanced"`. Hidden tab ⇒ ask peers to pause our video.
 - **Active speaker:** from `audioLevel` in inbound-rtp stats (no extra AudioContext per peer).
 
+## 4b. Transport (ADR-0006)
+`MediaTransport` interface in `web/src/core/transport/`: `MeshTransport` now, `SfuTransport` (Cloudflare Realtime) later. Mesh for ≤4 / light load; whole room switches to SFU when load demands. UI is transport-agnostic.
+
+## 4c. Observability — the agent's eyes (no human in the loop)
+- **Client logs:** structured `LogEntry` ring buffer in every core module (`web/src/core/log.ts`), readable via `window.__clearcall.logs()` with `?qa=1`. In local dev the Worker exposes `/api/dev/config` + `/api/dev/log` (enabled only by `DEV_TELEMETRY=1`, a dev-only var) and clients batch-ship logs + stats samples there, so `.claude/state/logs/dev-server.log` holds **every participant's** timeline interleaved with server events.
+- **Server logs:** one JSON line per room event (join/resume/leave/timeout/error/limits) with a short room-id prefix; never names, SDP or keys. Production: Workers observability + `wrangler tail`.
+- **Stats timeline:** 1 Hz `QaStatsSample` (bitrates, RTT, loss, jitter buffer, freezes, encode/decode ms per frame, long tasks, heap) via `__clearcall.statsTimeline()`.
+- **E2E artifacts:** every participant's console, page errors and failed requests are captured and attached; traces/videos retained on failure.
+- **`make diag N=4 DURATION=60`:** headless N-party call → `quality/reports/diag-<ts>/` with per-participant logs, stats timeline (JSON + summary), worker log slice, screenshots, CPU per browser (CDP), and a `summary.md` flagging anomalies (failed connections, freezes, bitrate below policy, high encode time, errors).
+- **Performance budgets:** initial JS gzip size (build check), time-to-first-remote-frame, CPU/encode time per participant count.
+
 ## 5. Web app
 - Preact + `@preact/signals` + Vite + TS strict. No CSS framework: design tokens in `web/src/ui/tokens.css`.
 - `core/` exposes a `CallController` (`web/src/core/types.ts`); `ui/` only talks to that interface. A `FakeCallController` lets UI be built and screenshot-tested without WebRTC.

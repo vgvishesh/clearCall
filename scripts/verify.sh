@@ -15,7 +15,8 @@ rc=0
 pkg() { # area -> run lint/typecheck/test if the package exists
   local a=$1; [[ -f "$ROOT/$a/package.json" ]] || { echo "  ($a not scaffolded — skipped)"; return 0; }
   ensure_deps
-  run_logged "$a-lint" "$ROOT/node_modules/.bin/biome" check --colors=off "$ROOT/$a" || rc=1
+  # Run from the checkout root so Biome resolves this checkout's config/ignores (matters inside git worktrees).
+  (cd "$ROOT" && run_logged "$a-lint" node_modules/.bin/biome check --colors=off "$a") || rc=1
   ((lint_only)) && return 0
   (cd "$ROOT/$a" && run_logged "$a-typecheck" pnpm run --if-present typecheck) || rc=1
   (cd "$ROOT/$a" && run_logged "$a-test" pnpm run --if-present test) || rc=1
@@ -23,7 +24,8 @@ pkg() { # area -> run lint/typecheck/test if the package exists
 for a in "${areas[@]}"; do
   say "verify $a"
   case $a in
-    protocol|web|signaling|quality) pkg "$a" ;;
+    protocol|signaling|quality) pkg "$a" ;;
+    web)     pkg web; ((lint_only)) || "$ROOT/scripts/bundle-size.sh" || rc=1 ;;
     e2e)     pkg e2e ;;  # e2e unit-level checks only (lint/typecheck); full runs via `make e2e`
     harness) run_logged hook-tests "$ROOT/scripts/test-hooks.sh" || rc=1 ;;
   esac

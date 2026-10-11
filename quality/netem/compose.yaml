@@ -1,0 +1,19 @@
+# Manual 2-peer setup for poking at shaping by hand. The lab (`lab.ts --netem`) starts its own containers
+# with `docker run` (dynamic N) and does not use this file.
+#   docker compose -f quality/netem/compose.yaml up -d --build
+#   docker exec clearcall-netem-a tc qdisc add dev eth0 root netem delay 50ms 15ms loss random 1% rate 3000kbit
+#   docker exec clearcall-netem-a ping -c 5 clearcall-netem-b
+services:
+  a: &peer
+    build: .
+    image: clearcall-lab-peer:1.64.0
+    container_name: clearcall-netem-a
+    cap_add: [NET_ADMIN]
+    shm_size: 1g
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes: ["../.cache/media:/media:ro"]
+    ports: ["127.0.0.1:3001:3000"]
+  b:
+    <<: *peer
+    container_name: clearcall-netem-b
+    ports: ["127.0.0.1:3002:3000"]

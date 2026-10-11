@@ -1,29 +1,27 @@
 import { ROOM_ID_RE } from "@clearcall/protocol";
+import { handleDev } from "./dev.ts";
+import { type Env, ROOM_HEADER } from "./env.ts";
 
 export { Room } from "./room.ts";
-
-export interface Env {
-  ROOM: DurableObjectNamespace<import("./room.ts").Room>;
-  ASSETS: Fetcher;
-  /** Optional Cloudflare Realtime TURN credentials (secrets). Without them, STUN only. */
-  TURN_KEY_ID?: string;
-  TURN_KEY_API_TOKEN?: string;
-}
 
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api/health") return Response.json({ ok: true });
+    const path = url.pathname;
+    if (path === "/api/health") return Response.json({ ok: true });
 
-    const m = url.pathname.match(/^\/api\/room\/([^/]+)$/);
+    const m = path.match(/^\/api\/room\/([^/]+)$/);
     if (m) {
       const roomId = m[1]!;
       if (!ROOM_ID_RE.test(roomId)) return new Response("bad room id", { status: 400 });
-      if (request.headers.get("Upgrade") !== "websocket")
-        return new Response("expected websocket", { status: 426 });
-      return env.ROOM.getByName(roomId).fetch(request);
+      if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+        return new Response("expected websocket", { status: 426, headers: { Upgrade: "websocket" } });
+      const headers = new Headers(request.headers);
+      headers.set(ROOM_HEADER, roomId);
+      return env.ROOM.getByName(roomId).fetch(new Request(request.url, { headers }));
     }
-    if (url.pathname.startsWith("/api/")) return new Response("not found", { status: 404 });
+    if (path.startsWith("/api/dev/")) return handleDev(request, env, path);
+    if (path.startsWith("/api/")) return new Response("not found", { status: 404 });
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;

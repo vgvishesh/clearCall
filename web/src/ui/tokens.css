@@ -1,0 +1,114 @@
+/*
+ * Clearcall design tokens. Every color, space, radius and type size used by the UI lives here.
+ * Dark by default. Screens outside the call opt into the system light theme with data-theme="auto" on <html>;
+ * the call screen sets data-theme="dark" and always stays dark.
+ * `.force-dark` re-applies the dark palette inside a light screen (controls floating over the lobby video).
+ */
+:root,
+.force-dark {
+  color-scheme: dark;
+
+  /* Color — one accent (primary action + speaking ring), danger only for Leave. */
+  --bg: #0b0d10;
+  --surface-1: #14171c;
+  --surface-2: #1c2027;
+  --surface-3: #262b33;
+  --border: #2a2f37;
+  --text: #f2f4f7;
+  --text-muted: #9aa3ad;
+  --accent: #4cc2ff;
+  --accent-pressed: #36a9e6;
+  --on-accent: #04121c;
+  --accent-text: #4cc2ff;
+  --danger: #ff5a5f;
+  --danger-pressed: #e6474c;
+  --on-danger: #ffffff;
+  --inverse: #f2f4f7;
+  --on-inverse: #0b0d10;
+  --scrim: rgb(5 6 8 / 0.62);
+  --scrim-soft: rgb(5 6 8 / 0.4);
+  --label-bg: rgb(5 6 8 / 0.6);
+  --focus: #4cc2ff;
+  --video-bg: #101318;
+  --ctl-bg: #262b33;
+  --ctl-hover: #323843;
+  --dock-bg: rgb(20 23 28 / 0.8);
+  --glass: rgb(11 13 16 / 0.55);
+  --shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  --gradient-top: linear-gradient(rgb(0 0 0 / 0.5), rgb(0 0 0 / 0));
+  --gradient-bottom: linear-gradient(rgb(0 0 0 / 0), rgb(0 0 0 / 0.55));
+}
+
+:root {
+  /* Space — 8 px scale (4 for fine-tuning). */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 40px;
+  --s-8: 48px;
+  --s-10: 64px;
+
+  /* Radii */
+  --r-s: 12px;
+  --r-l: 20px;
+  --r-full: 999px;
+
+  /* Type */
+  --font: system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --t-xs: 12px;
+  --t-s: 14px;
+  --t-m: 16px;
+  --t-l: 20px;
+  --t-xl: 28px;
+  --t-2xl: 36px;
+  --lh: 1.45;
+
+  /* Sizes */
+  --tap: 48px;
+  --btn-h: 56px;
+  --ctl: clamp(48px, 12.5vw, 60px);
+  --ctl-gap: clamp(6px, 2.2vw, 16px);
+  --header-h: 56px;
+  --content-max: 440px;
+
+  /* Safe areas — components use these vars (screenshot tests override them to simulate a notch). */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur: 220ms;
+  --dur-slow: 360ms;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --surface-1: #ffffff;
+    --surface-2: #eceef2;
+    --surface-3: #e1e4e9;
+    --border: #d9dde3;
+    --text: #0b0d10;
+    --text-muted: #555e69;
+    --accent-text: #0a6896;
+    --inverse: #0b0d10;
+    --on-inverse: #f5f6f8;
+    --focus: #0a6896;
+    --video-bg: #dfe3e8;
+    --shadow: 0 10px 30px rgb(11 13 16 / 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

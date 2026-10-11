@@ -8,6 +8,15 @@ import type { ReadonlySignal } from "@preact/signals";
 export type AudioMode = "voice" | "music";
 export type Facing = "user" | "environment";
 
+/**
+ * Phase semantics:
+ * - Lobby problems (camera/mic denied or missing) stay in phase "lobby" with `error` set
+ *   (code permission-denied | no-devices; see `local.camAvailable/micAvailable` for which device).
+ * - Fatal problems before joining → phase "error" (room-full, unsupported, invalid-link, version-mismatch,
+ *   signaling-unavailable while joining).
+ * - Fatal problems after having been in the call (signaling gone for > 60 s, version-mismatch) → phase "ended" with `error` set.
+ * - The controller is reusable: from "ended" or "error", `prepare({link})` starts over (Rejoin), `prepare({})` makes a new call.
+ */
 export type CallPhase =
   /** Nothing acquired yet (Home screen). */
   | "idle"
@@ -60,6 +69,10 @@ export interface LocalParticipant {
   speaking: boolean;
   /** True when the device has more than one camera (show flip button). */
   canSwitchCamera: boolean;
+  /** False when the camera is missing or denied (UI offers "Join without camera"). */
+  camAvailable: boolean;
+  /** False when the microphone is missing or denied (joining is still allowed, muted). */
+  micAvailable: boolean;
 }
 
 export interface RemoteParticipant {
@@ -70,7 +83,11 @@ export interface RemoteParticipant {
   micOn: boolean;
   camOn: boolean;
   mode: AudioMode;
-  /** Remote media. Null until the first track arrives. Attach to <video> (audio plays through the same element). */
+  /**
+   * Remote media. Null until the first track arrives. The UI attaches it to `<video autoplay playsinline muted>` —
+   * ALWAYS muted: the controller plays remote audio through its own hidden <audio> elements (one per participant,
+   * unaffected by layout changes) and reports autoplay rejection via `CallState.audioBlocked`.
+   */
   stream: MediaStream | null;
   status: PeerConnectionStatus;
   quality: ConnectionQuality;
@@ -92,6 +109,8 @@ export interface CallState {
   audioBlocked: boolean;
   /** Epoch ms when the local user entered `in-call`, for the call timer. */
   joinedAt: number | null;
+  /** Epoch ms when the call ended (Ended screen shows endedAt - joinedAt). */
+  endedAt: number | null;
 }
 
 export interface CallController {
@@ -99,8 +118,10 @@ export interface CallController {
 
   /**
    * Go to the lobby: parse/create the link and acquire camera+mic for preview.
-   * `link` = the current URL (join) or undefined (start a new call: generates a secret).
+   * `link` = the current URL or a pasted link (join), or undefined (start a new call: generates a secret).
+   * Always `history.replaceState` to `/c#<secret>` so reload/share use the canonical URL.
    * Must be called from a user gesture on iOS for reliable permission prompts.
+   * The factory `createCallController()` also installs telemetry and (with ?qa=1) `window.__clearcall`.
    */
   prepare(opts: { link?: string; name?: string }): Promise<void>;
 
@@ -114,6 +135,7 @@ export interface CallController {
   setCam(on: boolean): Promise<void>;
   switchCamera(): Promise<void>;
   setMode(mode: AudioMode): Promise<void>;
+  /** Truncated to MAX_NAME_LENGTH (40) from @clearcall/protocol; persisted to localStorage. */
   setName(name: string): void;
 
   /** UI reports the rendered size of a participant's video tile (CSS px × devicePixelRatio); 0 = hidden. */
@@ -132,14 +154,53 @@ export interface CallController {
   dispose(): void;
 }
 
-/** Shape exposed as `window.__clearcall` when the page is opened with `?qa=1` (E2E + quality lab contract). */
+/** Shape exposed as `window.__clearcall` when the page is opened with `?qa=1` (E2E, quality lab, diagnostics contract). */
 export interface QaHook {
   state(): CallState;
   /** One entry per remote participant. Missing browser stats fields are undefined, never throw. */
   stats(): Promise<QaPeerStats[]>;
+  /** Stats sampled every second since join (ring buffer, last 600 samples). */
+  statsTimeline(): QaStatsSample[];
+  /** Structured log ring buffer (last 2000 entries) from every core module. */
+  logs(): LogEntry[];
+  /** Which media transport is active (mesh now; sfu when implemented). */
+  transport(): TransportKind;
   /** Start recording remote media for the quality lab; resolves with a webm Blob per participant on stop. */
   startRecording(participantId: string): void;
   stopRecording(participantId: string): Promise<Blob | null>;
+  /** Fault injection for resilience tests. */
+  inject(fault: "drop-signaling" | "restart-ice" | "kill-peer", participantId?: string): void;
+}
+
+export type TransportKind = "mesh" | "sfu";
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+export interface LogEntry {
+  /** Epoch ms. */
+  t: number;
+  level: LogLevel;
+  /** Module: "signaling" | "peer" | "media" | "controller" | "policy" | "ui" | ... */
+  scope: string;
+  msg: string;
+  /** Small JSON-safe context (peer id, state names, error names). Never SDP bodies, keys or names of people. */
+  data?: Record<string, unknown>;
+}
+
+export interface QaStatsSample {
+  t: number;
+  /** Local process view. */
+  local: {
+    /** Sum over outbound video: totalEncodeTime / framesEncoded (ms per frame) — CPU cost signal. */
+    encodeMsPerFrame?: number;
+    outboundKbps?: number;
+    inboundKbps?: number;
+    /** Main-thread long tasks (ms) during the last second, via PerformanceObserver('longtask') where supported. */
+    longTaskMs?: number;
+    /** JS heap used (MB) where `performance.memory` exists. */
+    heapMb?: number;
+  };
+  peers: QaPeerStats[];
 }
 
 export interface QaPeerStats {
@@ -170,6 +231,15 @@ export interface QaPeerStats {
     framesPerSecond?: number;
     sentFrameHeight?: number;
     qualityLimitationReason?: string;
+    /** totalDecodeTime / framesDecoded (ms). */
+    decodeMsPerFrame?: number;
+    /** totalEncodeTime / framesEncoded (ms) for our outbound stream to this peer. */
+    encodeMsPerFrame?: number;
+    /** jitterBufferDelay / jitterBufferEmittedCount (ms). */
+    jitterBufferMs?: number;
     codec?: string;
   };
+  /** Derived kbps since the previous sample (both directions, audio+video). */
+  inboundKbps?: number;
+  outboundKbps?: number;
 }

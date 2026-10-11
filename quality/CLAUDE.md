@@ -9,6 +9,20 @@ Load the `quality-lab` skill.
 - `reference-media/` — **owner-controlled** test corpus. Agents may read it, never write it (hook-enforced).
 - `thresholds.yaml` — **owner-controlled** pass/fail gates (hook-enforced). Until adopted, see `thresholds.proposed.yaml`.
 
+## Tools (run from quality/, or `pnpm --filter @clearcall/quality exec …`)
+| Command | What |
+|---|---|
+| `tsx src/prepare-media.ts [--force]` | synthetic corpus → `.cache/media/` (say speech, noisy speech, music, two y4m loops with a frame-ID barcode; every frame verified) |
+| `pnpm lab --profile <name\|all> [--netem] [--duration s]` | full lab run (`make quality PROFILE=…`); UNSHAPED without `--netem`; exit 1 on breach |
+| `pnpm lab --selftest [--kbps 1000]` | no app needed: in-page WebRTC loopback with file-fed media → real scorers |
+| `pnpm compare <base> <cand>` | report diff + win/loss verdict |
+| `tsx src/score.ts --video-ref talking_head --video-deg rec.webm` (also `--speech-*`, `--music-*`, `--dnsmos-only`) | score any file pair |
+| `tsx src/validate-scorers.ts` | scorer sanity: reference vs ffmpeg-degraded copies, checks expected orderings |
+| `tsx src/netem-check.ts --profile 3g_lossy` | verify tc netem shaping on Docker (alpine peers, ping RTT/loss) |
+| `make diag N=4 DURATION=60 ARGS="--fault drop-signaling@20s"` | debug bundle → `reports/diag-<ts>/summary.md` |
+Python scorers (`scorers/*.py`) run via `uv run --script` (PEP 723 deps); the DNSMOS model downloads to `.cache/models/`.
+Docker Desktop's VM lacks `ifb`, so `--netem` shapes uplink only (reported). The netem image (Playwright 1.64 base) needs ~6 GB disk.
+
 ## Reference corpus (owner adds; record source + license for each file)
 - Speech: VCTK / LibriSpeech (CC-BY); noisy speech: Microsoft DNS Challenge corpus (CC-BY).
 - Music: CC0/CC-BY tracks covering voice+guitar, piano, full mix with drums.

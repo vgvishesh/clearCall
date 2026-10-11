@@ -1,0 +1,15 @@
+[
+  {
+    "peer": "AAAAAAAAAAAAAAAA",
+    "entries": [
+      {
+        "t": 1760000000000,
+        "level": "info",
+        "scope": "peer",
+        "msg": "ice state",
+        "data": { "state": "connected" }
+      }
+    ]
+  },
+  { "peer": "lobby-x1", "entries": [], "samples": [{ "t": 1, "local": {}, "peers": [] }] }
+]
