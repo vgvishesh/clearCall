@@ -1,24 +1,22 @@
-# Plan & status
+# Plan & status — Clearcall V1 (web)
 
-Agents: read this at the start of non-trivial work; update the status column and "Log" when you finish something.
-Per-feature plans live in `docs/plans/<feature>.md` (written by the `implement` skill).
+Agents: read at the start of non-trivial work; update Status and the Log when you finish something.
+Per-feature plans: `docs/plans/<slug>.md`.
 
 ## Milestones
 | # | Milestone | Exit criteria | Status |
 |---|---|---|---|
-| M0 | Harness | hooks, skills, agents, make targets, doctor green | in progress (toolchain blocked: see docs/SETUP.md) |
-| M1 | Skeletons | `ios/` XcodeGen app + `android/` Compose app build, launch, screenshot via `make ios-run`/`android-run`; `signaling/` Worker with `wrangler dev` + tests; `protocol/` schema v0 + fixtures round-tripped by all three | todo |
-| M2 | Quality lab v0 | `quality/webpeer` bot + Playwright runner; netem profiles; VMAF/ViSQOL/DNSMOS/getStats scorers; `make quality PROFILE=...` produces a report for bot↔bot | todo |
-| M3 | 1:1 P2P call | onboarding (identity keypair + invite link), contacts, call/ring via CallKit/Telecom + VoIP/FCM push, STUN+TURN; app↔bot quality report passes `4g_typical` | todo |
-| M4 | Audio excellence | voice mode (ML NS) + music mode; DNSMOS/ViSQOL targets met on noisy + music corpora | todo |
-| M5 | Group calls | mesh ≤3, Cloudflare SFU 4–10 with simulcast + layer selection; 1 device + 9 bots passes gates | todo |
-| M6 | E2EE on SFU path, codec tuning (AV1/VP9/H.264 bake-off) | report shows bandwidth-at-equal-VMAF vs baseline | todo |
-| M7 | Remote quality + release | staging Worker, GH Actions remote runs, TestFlight / Play internal track | todo |
+| W0 | Harness + workspace + contracts | web-focused hooks/skills/agents; pnpm workspace builds; `protocol/` + `web/src/core/types.ts` agreed | in progress |
+| W1 | Parallel build | signaling Worker · WebRTC core · UI/PWA shell (on FakeCallController) · E2E + lab scaffolding — each green on its branch | todo |
+| W2 | Integration: first real call | 2 Chromium peers call each other via `make dev`; `make e2e` 2/3/4-party green | todo |
+| W3 | Robustness | reconnect/resume, ICE restart, room full, permissions errors, 10-party E2E, WebKit + Firefox E2E | todo |
+| W4 | Quality | lab runs bot↔bot on all profiles; music mode; codec/RED decisions from data; thresholds adopted | todo |
+| W5 | Owner device test + deploy | owner `wrangler login`; staging deploy; iPhone + Android real-device checklist incl. background-audio spike | todo |
+| W6 | V1.1 | ML noise suppression (if lab proves it), install hint polish, ringing via Web Push (design TBD) | todo |
 
 ## Open decisions (owner)
-- Identity/discovery: invite link (recommended v1) vs phone OTP vs Sign in with Apple/Google — ARCHITECTURE §6
-- Min OS: iOS 17 / Android 8 (API 26) proposed
-- App name / bundle id (placeholder `com.example.clearcall`)
+- Cloudflare login for deploy (owner runs `! npx wrangler login` when ready)
+- Adopt quality thresholds: `mv quality/thresholds.proposed.yaml quality/thresholds.yaml`
 
 ## Log
-- 2026-10-11 — M0 harness scaffolded.
+- 2026-10-11 — Harness scaffolded (native-first), then refocused to web-only V1. Name: Clearcall. Style: dark, calm, minimal. Local git only.

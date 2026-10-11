@@ -1,6 +1,6 @@
 # 0001 — Fully native apps (Swift/SwiftUI, Kotlin/Compose) on libwebrtc
 
-- Status: Proposed
+- Status: Deferred (V1 is web-only, see 0003)
 - Date: 2026-10-11
 
 ## Context
