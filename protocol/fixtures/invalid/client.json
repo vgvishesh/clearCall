@@ -1,0 +1,11 @@
+[
+  { "t": "join", "v": 1, "peerId": "short" },
+  { "t": "join", "peerId": "AAAAAAAAAAAAAAAA" },
+  { "t": "join", "v": 1, "peerId": "AAAAAAAAAAAAAAAA", "resume": "yes" },
+  { "t": "signal", "to": "BBBBBBBBBBBBBBBB", "data": "" },
+  { "t": "signal", "to": "BBBBBBBBBBBBBBBB", "data": "has spaces!" },
+  { "t": "signal", "data": "abc" },
+  { "t": "unknown" },
+  "not-an-object",
+  null
+]

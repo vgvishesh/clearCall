@@ -1,0 +1,6 @@
+[
+  { "k": "state", "name": "Ravi", "mic": true, "cam": false, "mode": "karaoke" },
+  { "k": "state", "name": "Ravi", "mic": "yes", "cam": false, "mode": "voice" },
+  { "k": "view", "height": -1 },
+  { "k": "view", "height": 99999 }
+]

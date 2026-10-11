@@ -1,0 +1,14 @@
+[
+  {
+    "t": "welcome",
+    "v": 1,
+    "peerId": "AAAAAAAAAAAAAAAA",
+    "peers": ["bad"],
+    "iceServers": [],
+    "resumed": false
+  },
+  { "t": "welcome", "v": 1, "peerId": "AAAAAAAAAAAAAAAA", "peers": [], "iceServers": [{ "url": "stun:x" }] },
+  { "t": "peer-left", "peerId": "BBBBBBBBBBBBBBBB", "reason": "crashed" },
+  { "t": "error", "code": "teapot" },
+  { "t": "signal", "from": "BBBBBBBBBBBBBBBB" }
+]

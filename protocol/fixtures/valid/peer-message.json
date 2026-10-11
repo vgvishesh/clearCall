@@ -1,0 +1,7 @@
+[
+  { "k": "state", "name": "Ravi", "mic": true, "cam": false, "mode": "voice" },
+  { "k": "state", "name": "Asha", "mic": false, "cam": true, "mode": "music" },
+  { "k": "view", "height": 360 },
+  { "k": "view", "height": 0 },
+  { "k": "bye" }
+]

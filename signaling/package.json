@@ -1,0 +1,20 @@
+{
+  "name": "@clearcall/signaling",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@clearcall/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@types/node": "^26.6.5",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.149.0"
+  }
+}

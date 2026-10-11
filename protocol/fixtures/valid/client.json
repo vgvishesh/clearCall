@@ -1,0 +1,7 @@
+[
+  { "t": "join", "v": 1, "peerId": "AAAAAAAAAAAAAAAA" },
+  { "t": "join", "v": 1, "peerId": "Ab-_9zZZqqqq0000", "resume": true },
+  { "t": "signal", "to": "BBBBBBBBBBBBBBBB", "data": "aGVsbG8td29ybGQtY2lwaGVydGV4dA" },
+  { "t": "leave" },
+  { "t": "leave", "futureField": 42 }
+]

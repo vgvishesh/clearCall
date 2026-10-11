@@ -1,0 +1,33 @@
+[
+  {
+    "t": "welcome",
+    "v": 1,
+    "peerId": "AAAAAAAAAAAAAAAA",
+    "peers": [],
+    "iceServers": [{ "urls": "stun:stun.cloudflare.com:3478" }],
+    "resumed": false
+  },
+  {
+    "t": "welcome",
+    "v": 1,
+    "peerId": "AAAAAAAAAAAAAAAA",
+    "peers": ["BBBBBBBBBBBBBBBB", "CCCCCCCCCCCCCCCC"],
+    "iceServers": [
+      {
+        "urls": [
+          "turn:turn.cloudflare.com:3478?transport=udp",
+          "turns:turn.cloudflare.com:443?transport=tcp"
+        ],
+        "username": "u",
+        "credential": "c"
+      }
+    ],
+    "resumed": true
+  },
+  { "t": "peer-joined", "peerId": "BBBBBBBBBBBBBBBB" },
+  { "t": "peer-left", "peerId": "BBBBBBBBBBBBBBBB", "reason": "left" },
+  { "t": "peer-left", "peerId": "BBBBBBBBBBBBBBBB", "reason": "timeout" },
+  { "t": "signal", "from": "BBBBBBBBBBBBBBBB", "data": "Y2lwaGVydGV4dA" },
+  { "t": "error", "code": "room-full" },
+  { "t": "error", "code": "version", "message": "Please reload" }
+]

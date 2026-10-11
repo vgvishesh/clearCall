@@ -1,0 +1,14 @@
+{
+  "name": "@clearcall/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@clearcall/protocol": "workspace:*",
+    "@playwright/test": "^1.64.0",
+    "@types/node": "^26.6.5"
+  }
+}

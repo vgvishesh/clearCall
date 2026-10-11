@@ -1,0 +1,10 @@
+packages:
+  - protocol
+  - web
+  - signaling
+  - e2e
+  - quality
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+  - sharp

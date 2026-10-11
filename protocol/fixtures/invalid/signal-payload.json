@@ -1,0 +1,6 @@
+[
+  { "k": "hello", "name": "This name is far too long to be accepted by the protocol" },
+  { "k": "sdp", "description": { "type": "bogus", "sdp": "" } },
+  { "k": "ice", "candidate": { "sdpMid": "0" } },
+  { "k": "ice" }
+]
