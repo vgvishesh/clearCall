@@ -1,29 +1,25 @@
 # Single entry point for humans, Claude, hooks and CI. Logic lives in scripts/.
 SHELL := /bin/bash
 PROFILE ?= 4g_typical
-.PHONY: doctor verify fmt lint ios-build ios-test ios-run ios-gen android-build android-test android-run \
-        signaling-dev signaling-test signaling-deploy-staging protocol-check e2e screenshots quality quality-all
+.PHONY: doctor install verify fmt lint dev dev-stop web-build web-test signaling-test protocol-check e2e e2e-ui screenshots quality quality-all tunnel deploy-staging
 
-doctor:            ; @scripts/doctor.sh
-verify:            ; @scripts/verify.sh $(AREAS)
-fmt:               ; @scripts/fmt.sh all
-lint:              ; @scripts/verify.sh --lint-only $(AREAS)
+doctor:          ; @scripts/doctor.sh
+install:         ; @pnpm install
+verify:          ; @scripts/verify.sh $(AREAS)
+lint:            ; @scripts/verify.sh --lint-only $(AREAS)
+fmt:             ; @scripts/fmt.sh
 
-ios-gen:           ; @scripts/ios.sh gen
-ios-build:         ; @scripts/ios.sh build
-ios-test:          ; @scripts/ios.sh test
-ios-run:           ; @scripts/ios.sh run
+dev:             ; @scripts/dev.sh start      # build web, run worker on :8787 in background, wait until healthy
+dev-stop:        ; @scripts/dev.sh stop
+web-build:       ; @pnpm --filter @clearcall/web build
+web-test:        ; @scripts/verify.sh web
+signaling-test:  ; @scripts/verify.sh signaling
+protocol-check:  ; @scripts/verify.sh protocol web signaling
 
-android-build:     ; @scripts/android.sh build
-android-test:      ; @scripts/android.sh test
-android-run:       ; @scripts/android.sh run
+e2e:             ; @scripts/e2e.sh $(ARGS)     # e.g. make e2e ARGS="--project=chromium tests/two-party.spec.ts"
+screenshots:     ; @scripts/e2e.sh --project=screens
+quality:         ; @scripts/quality.sh $(PROFILE)
+quality-all:     ; @scripts/quality.sh all
 
-signaling-dev:     ; @scripts/signaling.sh dev
-signaling-test:    ; @scripts/signaling.sh test
-signaling-deploy-staging: ; @scripts/signaling.sh deploy-staging
-
-protocol-check:    ; @scripts/protocol-check.sh
-e2e:               ; @scripts/e2e.sh $(FLOW)
-screenshots:       ; @scripts/screenshot.sh both $(NAME)
-quality:           ; @scripts/quality.sh $(PROFILE)
-quality-all:       ; @scripts/quality.sh all
+tunnel:          ; @scripts/tunnel.sh          # public https URL to the local dev server for real-phone testing (asks owner)
+deploy-staging:  ; @scripts/deploy.sh staging
