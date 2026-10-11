@@ -37,10 +37,16 @@ make quality PROFILE=4g_typical   # media quality lab run
 Add missing targets to the Makefile/scripts rather than running ad-hoc commands repeatedly.
 
 ## Git & commit policy (hook-enforced where possible)
-- `main` is the integration branch. **Never commit directly on `main`** (a hook blocks it). Work on `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `test/<slug>`, `docs/<slug>`.
-- **Commit early and often**: one logical step per commit (a module + its tests, a screen, a config change). Never batch a whole feature into one commit. Conventional messages: `feat(web): ...`, `fix(signaling): ...`. End with the `Co-Authored-By` trailer.
-- Before merging: `make verify` green on the branch (and `make e2e` if call behavior changed). Merge with `git merge --no-ff <branch>` from `main`, then delete the branch.
-- **Parallel work uses git worktrees** (Agent tool `isolation: "worktree"`): each agent gets its own branch + checkout, commits there, and the orchestrator merges. Agents must stay inside their assigned paths to keep merges clean.
+- `main` only ever receives **one squashed commit per finished feature**. Never commit on `main` directly (a hook blocks it; only the squash-merge commit is allowed).
+- Work on `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `test/<slug>`, `docs/<slug>`, branched from an up-to-date `main`.
+- **Commit early and often on the branch**: one logical step per commit (a module + its tests, a screen, a config change). Never batch a whole feature into one branch commit. Conventional messages: `feat(web): ...`, `fix(signaling): ...`, ending with the `Co-Authored-By` trailer.
+- **Squash and merge when the feature is built and tests pass:** `make verify` green (plus `make e2e` if call behavior changed) on the branch, then
+  ```
+  git switch main && git merge --squash <branch> && git commit   # message: "<type>(<scope>): <feature summary>" + bullet list of what's in it + trailer
+  git branch -D <branch>
+  ```
+  Then rebase any other open branches onto the new `main`.
+- **Parallel work uses git worktrees** (Agent tool `isolation: "worktree"`): each agent works on its own package branch cut from the feature branch, commits there, and the orchestrator merges package branches into the feature branch (`git merge --no-ff`). Only the feature branch is squash-merged into `main`. Agents stay inside their assigned paths to keep merges clean.
 - No remote yet. Pushing asks the owner.
 
 ## Rules of the road
@@ -54,4 +60,4 @@ Add missing targets to the Makefile/scripts rather than running ad-hoc commands 
 - Keep the client small: no heavy deps without a one-line justification in the plan. Target < 100 KB gzipped JS for first load.
 
 ## Definition of done
-`make verify` green (Stop hook enforces) · tests for new logic · UI screenshots reviewed · call changes covered by E2E · media changes have a quality comparison · `docs/PLAN.md` updated · merged to `main` via `--no-ff`.
+`make verify` green (Stop hook enforces) · tests for new logic · UI screenshots reviewed · call changes covered by E2E · media changes have a quality comparison · `docs/PLAN.md` updated · squash-merged to `main` after tests pass.

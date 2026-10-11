@@ -44,7 +44,9 @@ expect "commit on main via -C"      deny  guard_bash.sh "$(jq -n --arg c "git -C
 expect "add && commit on main"      deny  guard_bash.sh "$(cj 'git add -A && git commit -m x')"
 git -C "$repo" switch -q -c feat/x
 expect "commit on feature branch"   allow guard_bash.sh "$(cj 'git commit -m x')"
-expect "merge into main"            allow guard_bash.sh "$(cj 'git switch main && git merge --no-ff feat/x')"
+git -C "$repo" switch -q feat/x; echo y > "$repo/g"; git -C "$repo" add g; git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m feat
+git -C "$repo" switch -q main; git -C "$repo" merge -q --squash feat/x >/dev/null
+expect "commit completing squash merge" allow guard_bash.sh "$(cj 'git commit -m "feat: x"')"
 rm -rf "$repo"
 
 echo "post_edit / stop_verify"
