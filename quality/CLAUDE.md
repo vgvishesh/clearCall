@@ -7,7 +7,7 @@ Load the `quality-lab` skill.
 - `netem/` — Docker (Linux) setup: peers run in containers whose interfaces are shaped by `tc netem` per profile (macOS can't shape browser UDP reliably).
 - `profiles/*.yaml` — network conditions + topology + duration + media corpus.
 - `reference-media/` — **owner-controlled** test corpus. Agents may read it, never write it (hook-enforced).
-- `thresholds.yaml` — **owner-controlled** pass/fail gates (hook-enforced). Until adopted, see `thresholds.proposed.yaml`.
+- `thresholds.yaml` — **owner-controlled** pass/fail gates (hook-enforced). v2 adopted by the owner 2026-10-12.
 
 ## Tools (run from quality/, or `pnpm --filter @clearcall/quality exec …`)
 | Command | What |

@@ -10,16 +10,15 @@ Per-feature plans: `docs/plans/<slug>.md`.
 | W1 | Parallel build | signaling Worker · WebRTC core · UI/PWA shell (on FakeCallController) · E2E + lab + diag — each green on its branch | done |
 | W2 | Integration: first real call | 2 Chromium peers call each other via `make dev`; `make e2e` 2/3/4-party green | done |
 | W3 | Robustness | reconnect/resume, ICE restart, room full, permissions errors, 10-party E2E, WebKit + Firefox E2E | done |
-| W4 | Quality | lab runs on all profiles; music mode; codec/RED/start-bitrate decisions from data; thresholds revised + adopted | done except shaped (netem) profiles + owner threshold adoption |
+| W4 | Quality | lab runs on all profiles; music mode; codec/RED/start-bitrate decisions from data; thresholds revised + adopted | done except shaped (netem) profiles (thresholds v2 adopted 2026-10-12) |
 | W5 | Owner device test + deploy | owner `wrangler login`; staging deploy; iPhone + Android real-device checklist incl. background-audio spike | todo |
 | W5b | SFU transport (ADR-0006) | Cloudflare Realtime SfuTransport behind MediaTransport; room switches mesh→SFU under load; group_10 gates | todo (needs owner Cloudflare Realtime creds) |
 | W6 | V1.1 | ML noise suppression (if lab proves it), install hint polish, ringing via Web Push (design TBD) | todo |
 
 ## Open decisions (owner)
 - Cloudflare login for deploy (owner runs `! npx wrangler login` when ready)
-- Adopt quality thresholds v2 (data-derived): `mv quality/thresholds.proposed.yaml quality/thresholds.yaml`
-- Tier 3–4 video cap 600 → 800 kbps? (+6–7 VMAF, +32 % upload)
-- Docker Desktop storage is broken (multi-layer images fail: 'too many levels of symbolic links'); netem lab blocked until restarted/repaired. Agents pulled playwright:v1.64.0-noble (2.47 GB) + ubuntu:24.04 — owner may remove.
+- (decided 2026-10-12) Tier 3–4: owner wants BOTH 600 and 800 kbps, switched per user by available bandwidth — in progress (feat/adaptive-tier-cap).
+- Docker restarted by owner 2026-10-12: general images run; playwright base image still fails (overlay "too many levels of symbolic links") — netem image being rebuilt on ubuntu base (chore/netem-unblock).
 
 ## Log
 - 2026-10-11 — Harness scaffolded (native-first), then refocused to web-only V1. Name: Clearcall. Style: dark, calm, minimal. Local git only.
