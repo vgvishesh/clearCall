@@ -16,7 +16,7 @@ Per-feature plans: `docs/plans/<slug>.md`.
 | W6 | V1.1 | ML noise suppression (if lab proves it), install hint polish, ringing via Web Push (design TBD) | todo |
 
 ## Open decisions (owner)
-- Cloudflare login for deploy (owner runs `! npx wrangler login` when ready)
+- TURN: owner creates a Realtime TURN key in the dashboard and sets TURN_KEY_ID + TURN_KEY_API_TOKEN secrets on clearcall-staging (wrangler OAuth lacks Realtime scope).
 - (decided 2026-10-12) Tier 3–4: owner wants BOTH 600 and 800 kbps, switched per user by available bandwidth — in progress (feat/adaptive-tier-cap).
 - Docker restarted by owner 2026-10-12: general images run; playwright base image still fails (overlay "too many levels of symbolic links") — netem image being rebuilt on ubuntu base (chore/netem-unblock).
 
@@ -27,3 +27,4 @@ Per-feature plans: `docs/plans/<slug>.md`.
 - 2026-10-12 — W4 squash-merged: good_wifi VMAF 81.5→85.5 at same 1.52 Mbps (lab recorder fix + AV1 for 1:1), 720p ramp 17.5→5.4 s, VP8 for 3–10 (CPU), music mode stereo Opus +16 dB SNR, voice defaults kept (ADR-0007), thresholds v2 proposed. Found pre-existing Firefox 3-party intermittent media stall (2/4 on main) — investigating.
 - 2026-10-12 — Firefox 3-party stall fixed: Firefox H264 sender stalls on mid-call resolution change; Gecko now ignores its H264 power-efficient claim (VP8/AV1 per tier), impolite-only re-offer on tier change. Firefox call-basic 20/20, Chromium 15/15, WebKit 6/6. Untested: Firefox paired with Safari/Chrome-HW-H264 (could still pick H264).
 - 2026-10-12 — Firefox reload flake fixed: Firefox never settles a getStats pending when its pc closes (ghost pair dropped after reload) → hung stats() and would stop the stats sampler mid-call in production. PeerSession rejects pending getStats on close/rebuild. Firefox reload 60/60 (was 25/30).
+- 2026-10-12 — Staging deployed: the staging Worker (workers.dev) (STUN only until TURN secrets set). E2E against staging: call-basic Chromium 3/3, Firefox 2/2, WebKit 2/2; full Chromium 15/15 (an earlier run at load avg 74 had 4 load-induced failures).
