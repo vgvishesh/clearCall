@@ -3,7 +3,7 @@
 Feature branch `feat/w4-quality`; package branches merge back with --no-ff; squash to main when acceptance passes.
 Every media change follows the quality-lab workflow: baseline → change → same profiles (same seed) → `pnpm compare` → table in the commit message. Lab/diag runs are serialized host-wide by the lab lock; don't bypass it.
 
-## Baseline (main fa08768, good_wifi, unshaped, 2 peers, synthetic corpus)
+## Baseline (main fab5f89, good_wifi, unshaped, 2 peers, synthetic corpus)
 VMAF 81.5 (p5 76.0) · send 1520 kbps (policy cap 1.5 Mbps) · TTFF 848 ms · freezes 0.5 % · DNSMOS noisy-in S/B/O 3.61/2.48/2.42 → received 3.27/3.68/2.86 · PESQ-WB vs sent 1.60 (metric misuse on noisy corpus) · ramp 180p→720p ≈ 16 s (fake device) · diag N=4: low-bitrate soft anomalies (encoder under-using 600 kbps tier).
 
 ## Package V — video (media-engineer, branch pkg/video, DEV_PORT 8796)

@@ -79,11 +79,11 @@ the max over participants. Reports in `quality/reports/` (raw recordings deleted
 
 | n | build | VMAF | VMAF p5 | VMAF late | send kbps | recv height | CPU/peer | high (2nd half) | first high | level changes/pair |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 3 | main 1099af7 (base3) | 68.42 | 63.44 | 68.1¹ | 1256 | 270 | 51 % | — | — | — |
+| 3 | main 91d641a (base3) | 68.42 | 63.44 | 68.1¹ | 1256 | 270 | 51 % | — | — | — |
 | 3 | adaptive, 800 cap only (cand3) | 67.61 | 63.62 | — | 1477 | 270 | 45 % | — | ~12 s | flapping (20–40 s backoff) |
 | 3 | adaptive, final (cand3b) | 74.29 | 68.13 | 75.04 | 1593 | 344² | 49 % | 100 % | 10.3 s | 1 |
 | 3 | adaptive, final (cand3c) | 73.66 | 66.74 | 75.05 | 1586 | 341² | 48 % | 100 % | 11.5 s | 1 |
-| 3 | adaptive, branch head a91f8a5 (final3) | 73.93 | 66.69 | 75.53 | 1589 | 345² | 58 % | 100 % | 10.4 s | 1 |
+| 3 | adaptive, final branch head (squashed into 605ca1b) (final3) | 73.93 | 66.69 | 75.53 | 1589 | 345² | 58 % | 100 % | 10.4 s | 1 |
 | 4 | pinned base (`?vlevel=base` = main policy) | 66.97 | 63.07 | 66.80 | 1887 | 270 | 55 % | 0 % | — | 0 |
 | 4 | adaptive, final (cand4) | 73.87 | 67.00 | 75.07 | 2367 | 336² | 65 % | 100 % | 10.1 s | 1 |
 

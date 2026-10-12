@@ -77,7 +77,7 @@ The 10-party rows run 10 participants on one 8-core host (90 encodes + 90 decode
 device-realistic cost.
 
 **In-app confirmation of the shipped defaults (good_wifi, unshaped, same seed):**
-- Pre-W4 baseline (817c5ad): VMAF 81.41 at 1528 kbps send.
+- Pre-W4 baseline (fab5f89): VMAF 81.41 at 1528 kbps send.
 - Shipped defaults (AV1 picked by the tier order): 85.49 / 85.50 / 85.52 at 1524 kbps. Compare: win, +4.1 VMAF
   (p5 +5.2) at equal bandwidth.
 - Same build at 3 participants picks VP8.
