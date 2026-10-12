@@ -56,7 +56,7 @@ The owner is out of the loop: you run, test, debug and improve everything yourse
 - `window.__clearcall` (`?qa=1`): `logs()`, `stats()`, `statsTimeline()`, `transport()`, `inject(fault)`.
 - Playwright traces/videos for failed E2E: `e2e/test-results/`; `pnpm --filter @clearcall/e2e exec playwright show-trace <zip>` is not viewable headless — read the attached console logs instead.
 - Interactive look: Playwright MCP (headless, device emulation) or Claude in Chrome.
-**Host limits (shared M1, 8 cores, ~23 GB free disk):** more than ~6 Chromium processes thermally throttles the machine (load avg 379, `kernel_task` 133 % observed) and produces fake failures (dead sockets, freezes). Large-call tests use one browser with N contexts; heavy runs never overlap. Docker pulls/builds need ≥ 15 GB free (hook-enforced); never prune the owner's Docker data.
+**Host limits (shared M1, 8 cores, ~23 GB free disk):** more than ~6 Chromium processes thermally throttles the machine (load avg 379, `kernel_task` 133 % observed) and produces fake failures (dead sockets, freezes). Large-call tests use one browser with N contexts; heavy runs never overlap. Docker pulls/builds need ≥ 15 GB free, running built images ≥ 8 GB (hook + quality.sh enforced); never prune the owner's Docker data.
 Ping the owner only for: money/accounts (Cloudflare login, TURN/SFU credentials), real-device checks you can't automate, and product/design decisions.
 
 ## Rules of the road

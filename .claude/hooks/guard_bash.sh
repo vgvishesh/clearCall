@@ -33,11 +33,15 @@ if grep -Eq '^\s*git\s+(-C\s+\S+\s+)?commit\b' <<<"$segs"; then
     decide deny "Commit policy: don't commit directly on $branch. Create a branch first: git switch -c feat/<slug> (or fix/, chore/, test/, docs/), commit there, and squash-merge into main when tests pass (git merge --squash <branch> && git commit)."
   fi
 fi
-# Disk guard: image pulls/builds once filled the shared disk. Require headroom (MIN_FREE_GB, default 15).
-if grep -Eq 'docker\s+(build|pull|buildx\s+build|compose\s+.*(build|up|pull)|run\s)' <<<"$cmd"; then
+# Disk guard: image pulls/builds once filled the shared disk. Pulls/builds need MIN_FREE_GB (default 15); running an
+# already-built image only writes small container layers, so runs need MIN_RUN_FREE_GB (default 8; owner, 2026-10-12).
+min_gb=""
+if grep -Eq 'docker\s+(build|pull|buildx\s+build|compose\s+.*(build|pull))' <<<"$cmd"; then min_gb=${MIN_FREE_GB:-15}
+elif grep -Eq 'docker\s+(run\s|compose\s+.*up)' <<<"$cmd"; then min_gb=${MIN_RUN_FREE_GB:-8}; fi
+if [[ -n "$min_gb" ]]; then
   free_gb=$(df -g / 2>/dev/null | awk 'NR==2{print $4}')
-  if [[ -n "$free_gb" && "$free_gb" -lt "${MIN_FREE_GB:-15}" ]]; then
-    decide deny "Only ${free_gb} GB free on / (need ≥ ${MIN_FREE_GB:-15} GB) — Docker image pulls/builds can fill the shared disk. Don't prune the owner's images or caches; report to the owner instead."
+  if [[ -n "$free_gb" && "$free_gb" -lt "$min_gb" ]]; then
+    decide deny "Only ${free_gb} GB free on / (need ≥ ${min_gb} GB for this Docker command) — Docker can fill the shared disk. Don't prune the owner's images or caches; report to the owner instead."
   fi
 fi
 grep -Eq 'docker\s+(system|builder|image|volume|container)\s+prune|docker\s+(rmi|volume\s+rm)' <<<"$cmd" && decide ask "Pruning/removing Docker images, caches or volumes can delete the owner's data on this shared machine."
