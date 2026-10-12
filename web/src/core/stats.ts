@@ -67,6 +67,7 @@ export function summarizePeerStats(
   const inV = byType("inbound-rtp").find((s) => kindOf(s) === "video");
   const outA = byType("outbound-rtp").find((s) => kindOf(s) === "audio");
   const outV = byType("outbound-rtp").find((s) => kindOf(s) === "video");
+  const remoteInV = byType("remote-inbound-rtp").find((s) => kindOf(s) === "video");
 
   // Selected candidate pair: transport.selectedCandidatePairId, else a succeeded+nominated/selected pair.
   const transport = byType("transport")[0];
@@ -116,6 +117,7 @@ export function summarizePeerStats(
       encodeMsPerFrame: round(ratio(outV?.totalEncodeTime, outV?.framesEncoded)),
       jitterBufferMs: round(ratio(inV?.jitterBufferDelay, inV?.jitterBufferEmittedCount)),
       codec: inV ? codecOf(inV) : outV ? codecOf(outV) : undefined,
+      remoteFractionLost: num(remoteInV?.fractionLost),
     },
   };
 

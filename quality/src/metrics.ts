@@ -212,3 +212,54 @@ export function adaptTimes(
     baseline_kbps: baseline,
   };
 }
+
+export interface SendLevelSummary {
+  high_ratio: number | null;
+  high_ratio_late: number | null;
+  first_high_s: number | null;
+  changes_max: number | null;
+}
+
+/**
+ * Adaptive send level (3–4 tier, ADR-0008) across every participant's timeline: share of pair-samples at "high"
+ * (whole run and second half), first upgrade (s since `t0`) and the most level changes on any one pair (flapping).
+ * All null when no sample carries a level (2-party, 5–10, or a build without it).
+ */
+export function sendLevelSummary(timelines: Record<string, QaStatsSample[]>, t0: number): SendLevelSummary {
+  let n = 0;
+  let high = 0;
+  let nLate = 0;
+  let highLate = 0;
+  let first: number | null = null;
+  let changesMax: number | null = null;
+  for (const tl of Object.values(timelines)) {
+    const sorted = [...tl].sort((a, b) => a.t - b.t);
+    if (!sorted.length) continue;
+    const mid = (sorted[0]!.t + sorted[sorted.length - 1]!.t) / 2;
+    const last = new Map<string, string>();
+    const changes = new Map<string, number>();
+    for (const s of sorted)
+      for (const p of s.peers) {
+        const lv = p.video.sendLevel;
+        if (!lv) continue;
+        n++;
+        if (s.t >= mid) nLate++;
+        if (lv === "high") {
+          high++;
+          if (s.t >= mid) highLate++;
+          const at = (s.t - t0) / 1000;
+          if (first === null || at < first) first = at;
+        }
+        const prev = last.get(p.id);
+        if (prev !== undefined && prev !== lv) changes.set(p.id, (changes.get(p.id) ?? 0) + 1);
+        last.set(p.id, lv);
+      }
+    for (const id of last.keys()) changesMax = Math.max(changesMax ?? 0, changes.get(id) ?? 0);
+  }
+  return {
+    high_ratio: n ? high / n : null,
+    high_ratio_late: nLate ? highLate / nLate : null,
+    first_high_s: first,
+    changes_max: changesMax,
+  };
+}

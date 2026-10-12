@@ -147,6 +147,7 @@ export const METRIC_SPEC: Record<
 > = {
   vmaf: { better: "higher", noise: 1, quality: true },
   vmaf_p5: { better: "higher", noise: 1.5 },
+  vmaf_late: { better: "higher", noise: 1 },
   vmaf_thumbnail: { better: "higher", noise: 1, quality: true },
   pesq_wb: { better: "higher", noise: 0.05, quality: true },
   pesq_wb_vs_clean: { better: "higher", noise: 0.05 },

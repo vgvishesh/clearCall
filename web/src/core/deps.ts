@@ -49,6 +49,8 @@ export interface CoreFlags {
   vcodec?: string | undefined;
   /** Video start bitrate override in kbps (`?vstart=`; 0 = libwebrtc default) — quality lab only. */
   vstart?: number | undefined;
+  /** Pin the 3–4 tier send level (`?vlevel=base|high`, ADR-0008) instead of adapting — quality lab A/B only. */
+  vlevel?: "base" | "high" | undefined;
   /** Mirror debug logs to the console (`?debug=1`). */
   debug: boolean;
   /** Install window.__clearcall (`?qa=1`). */
@@ -125,21 +127,23 @@ export function audioTuningFrom(p: URLSearchParams): AudioTuning | undefined {
 }
 
 /**
- * Video lab overrides: `?vcodec=vp8|vp9|h264|av1` (validated by codecs.forcedVideoOrder) and `?vstart=<kbps>`
- * (0…10000). Absent/invalid → not set, so defaults stay data-driven.
+ * Video lab overrides: `?vcodec=vp8|vp9|h264|av1` (validated by codecs.forcedVideoOrder), `?vstart=<kbps>`
+ * (0…10000) and `?vlevel=base|high`. Absent/invalid → not set, so defaults stay data-driven.
  */
-export function videoLabFlags(search: string): Pick<CoreFlags, "vcodec" | "vstart"> {
+export function videoLabFlags(search: string): Pick<CoreFlags, "vcodec" | "vstart" | "vlevel"> {
   let p: URLSearchParams;
   try {
     p = new URLSearchParams(search);
   } catch {
     return {};
   }
-  const out: Pick<CoreFlags, "vcodec" | "vstart"> = {};
+  const out: Pick<CoreFlags, "vcodec" | "vstart" | "vlevel"> = {};
   const vcodec = p.get("vcodec")?.toLowerCase();
   if (vcodec) out.vcodec = vcodec;
   const vstart = Number(p.get("vstart"));
   if (p.has("vstart") && Number.isInteger(vstart) && vstart >= 0 && vstart <= 10_000) out.vstart = vstart;
+  const vlevel = p.get("vlevel");
+  if (vlevel === "base" || vlevel === "high") out.vlevel = vlevel;
   return out;
 }
 

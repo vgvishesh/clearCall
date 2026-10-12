@@ -160,8 +160,12 @@ class Controller implements CallController {
     deps.window?.addEventListener("online", this.onOnline);
     deps.document?.addEventListener("visibilitychange", this.onVisibility);
     this.L.info("controller created", { qa: deps.flags.qa, red: deps.flags.red, audio: deps.flags.audio });
-    if (deps.flags.vcodec || deps.flags.vstart !== undefined)
-      this.L.info("video lab overrides", { vcodec: deps.flags.vcodec, vstart: deps.flags.vstart });
+    if (deps.flags.vcodec || deps.flags.vstart !== undefined || deps.flags.vlevel)
+      this.L.info("video lab overrides", {
+        vcodec: deps.flags.vcodec,
+        vstart: deps.flags.vstart,
+        vlevel: deps.flags.vlevel,
+      });
   }
 
   // ── state helpers ──
@@ -375,6 +379,7 @@ class Controller implements CallController {
       announce: () => this.announce(),
       codecPrefs: { red: d.flags.red, videoOrder, videoStartKbps: d.flags.vstart, audio: d.flags.audio },
       getCapabilities: d.getCapabilities,
+      ...(d.flags.vlevel ? { levelOverride: d.flags.vlevel } : {}),
       log: this.log.scope("peer"),
     });
     this.transport = transport;

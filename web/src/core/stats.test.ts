@@ -62,6 +62,7 @@ function chromeReport(scale = 1): Map<string, Record<string, unknown>> {
     totalEncodeTime: 0.15 * scale,
     qualityLimitationReason: "bandwidth",
   });
+  add({ id: "RIV", type: "remote-inbound-rtp", kind: "video", fractionLost: 0.0625 });
   return m;
 }
 
@@ -84,6 +85,7 @@ describe("summarizePeerStats", () => {
         frameHeight: 720,
         sentFrameHeight: 360,
         qualityLimitationReason: "bandwidth",
+        remoteFractionLost: 0.0625,
         decodeMsPerFrame: 2,
         encodeMsPerFrame: 5,
         jitterBufferMs: 50,

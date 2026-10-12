@@ -3,12 +3,14 @@
  *
  * | Participants (incl. self) | Max encode | Max bitrate / peer | fps |
  * | 1–2                        | 720p       | 1500 kbps          | 30  |
- * | 3–4                        | 360p       | 600 kbps           | 30  |
+ * | 3–4                        | 360p       | 600 / 800 kbps     | 30  |
  * | 5–10                       | 180p       | 150 kbps           | 15  |
  *
+ * 3–4 has two send levels per pair (ADR-0008): base 600 kbps, high 800 kbps when the link has headroom (adaptive.ts).
  * Further capped by the receiver's `view` message (rendered tile height in device px; 0 = not visible → pause),
  * and our own hidden tab makes us report view 0 to everyone (they pause sending to us).
  */
+import type { SendLevel } from "./adaptive.ts";
 import type { AudioMode } from "./types.ts";
 
 export interface Tier {
@@ -38,6 +40,17 @@ export function rungFor(h: number): { height: number; bitrate: number } {
   return LADDER[LADDER.length - 1]!;
 }
 
+/**
+ * Tier 3–4 `high` level (ADR-0008, owner decision 2026-10-12): 800 kbps instead of 600 when the pair's link has
+ * headroom. Replaces the tier cap and the 360p rung together (W4 cap knee: VMAF 68 → 75, received 270p → 360p).
+ */
+export const TIER4_HIGH_BITRATE = 800_000;
+
+/** Only the 3–4 tier has two send levels. */
+export function hasLevels(participants: number): boolean {
+  return participants >= 3 && participants <= 4;
+}
+
 export interface VideoPolicyInput {
   /** Participants in the room including ourselves. */
   participants: number;
@@ -45,6 +58,8 @@ export interface VideoPolicyInput {
   viewHeight?: number | undefined;
   /** Short side of our capture in px (e.g. 720 for 1280×720). undefined → assume 720. */
   sourceShortSide?: number | undefined;
+  /** Adaptive send level; only the 3–4 tier at its full 360p target uses it. undefined = base. */
+  level?: SendLevel | undefined;
 }
 
 export interface VideoEncodeCaps {
@@ -55,6 +70,17 @@ export interface VideoEncodeCaps {
   maxBitrate: number;
   maxFramerate: number;
   scaleResolutionDownBy: number;
+  /**
+   * Set only by the high level: "maintain-resolution". libwebrtc clears its quality-scaler restriction when the
+   * preference changes, so a sender that dropped to ~270p at 600 kbps returns to 360p at 800 (an 800 cap alone
+   * leaves it at 270p — lab, ADR-0008). Absent = browser default ("balanced"; restored when leaving high).
+   */
+  degradationPreference?: "maintain-resolution";
+}
+
+/** Whether the high level would change this encode: 3–4 tier and the receiver wants the full 360p target. */
+export function levelEligible(participants: number, targetHeight: number): boolean {
+  return hasLevels(participants) && targetHeight >= tierFor(participants).maxHeight;
 }
 
 export function videoPolicy(input: VideoPolicyInput): VideoEncodeCaps {
@@ -63,10 +89,19 @@ export function videoPolicy(input: VideoPolicyInput): VideoEncodeCaps {
   const active = view === undefined || view > 0;
   const viewRung = view !== undefined && view > 0 ? rungFor(view) : undefined;
   const targetHeight = Math.min(tier.maxHeight, viewRung?.height ?? tier.maxHeight);
-  const maxBitrate = Math.min(tier.maxBitrate, rungFor(targetHeight).bitrate);
+  const high = input.level === "high" && levelEligible(input.participants, targetHeight);
+  // High never changes the scale (Firefox's H264 sender stalls on scale changes): bitrate + degradation preference.
+  const maxBitrate = high ? TIER4_HIGH_BITRATE : Math.min(tier.maxBitrate, rungFor(targetHeight).bitrate);
   const source = input.sourceShortSide && input.sourceShortSide > 0 ? input.sourceShortSide : 720;
   const scaleResolutionDownBy = Math.max(1, Math.round((source / targetHeight) * 100) / 100);
-  return { active, targetHeight, maxBitrate, maxFramerate: tier.maxFramerate, scaleResolutionDownBy };
+  return {
+    active,
+    targetHeight,
+    maxBitrate,
+    maxFramerate: tier.maxFramerate,
+    scaleResolutionDownBy,
+    ...(high ? { degradationPreference: "maintain-resolution" as const } : {}),
+  };
 }
 
 /**
@@ -107,9 +142,13 @@ export function viewChanged(prev: number | undefined, next: number): boolean {
   return rungFor(prev).height !== rungFor(next).height;
 }
 
+type WithDegradation = RTCRtpSendParameters & { degradationPreference?: string };
+
 /**
  * Read-modify-write of RTCRtpSendParameters for video (Firefox requires the encodings length unchanged).
  * Returns null when nothing changes (skip the setParameters call).
+ * degradationPreference is only touched by the high level (and restored to "balanced" when leaving it); everywhere
+ * else it stays at the browser default — some engines throw on it (the caller retries without it).
  */
 export function mergeVideoEncoding(
   params: RTCRtpSendParameters,
@@ -123,15 +162,32 @@ export function mergeVideoEncoding(
     maxFramerate: caps.maxFramerate,
     scaleResolutionDownBy: caps.scaleResolutionDownBy,
   };
+  const current = (params as WithDegradation).degradationPreference;
+  const wantDp = caps.degradationPreference ?? (current && current !== "balanced" ? "balanced" : undefined);
+  const dpChange = wantDp !== undefined && wantDp !== current;
   const same =
     params.encodings?.length &&
+    !dpChange &&
     e0.active === next.active &&
     e0.maxBitrate === next.maxBitrate &&
     e0.maxFramerate === next.maxFramerate &&
     e0.scaleResolutionDownBy === next.scaleResolutionDownBy;
   if (same) return null;
-  // degradationPreference is left at the browser default ("balanced"); setting it throws in some versions.
-  return { ...params, encodings: [{ ...e0, ...next }, ...encodings.slice(1)] };
+  const out: WithDegradation = { ...params, encodings: [{ ...e0, ...next }, ...encodings.slice(1)] };
+  if (dpChange) out.degradationPreference = wantDp;
+  return out;
+}
+
+/** The same parameters without a degradationPreference change (fallback for engines that reject it). */
+export function withoutDegradation(
+  next: RTCRtpSendParameters,
+  prev: RTCRtpSendParameters,
+): RTCRtpSendParameters {
+  const out: WithDegradation = { ...next };
+  const p = (prev as WithDegradation).degradationPreference;
+  if (p === undefined) delete out.degradationPreference;
+  else out.degradationPreference = p;
+  return out;
 }
 
 export function mergeAudioEncoding(

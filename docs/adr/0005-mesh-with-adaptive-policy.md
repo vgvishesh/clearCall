@@ -1,6 +1,6 @@
 # 0005 — Full mesh up to 10 with a participant-count bandwidth policy
 
-- Status: Accepted (V1)
+- Status: Accepted (V1); 3–4 tier cap amended by ADR-0008
 - Date: 2026-10-11
 
 ## Context
@@ -14,7 +14,7 @@ W4 additions (evidence below):
   instead of libwebrtc's 300 kbps.
 - **Codec order per tier.** Power-efficient (hardware) codecs first. Then software order: 1–2 → AV1, VP9, VP8, H264;
   3–4 and 5–10 → VP8 first. Pairs renegotiate when the participant count crosses a tier.
-- **Caps unchanged for now.** Raising the 3–4 tier (and the 360p rung) from 600 to 800 kbps is recommended, but it
+- **3–4 cap: amended by ADR-0008** (owner decision 2026-10-12: adaptive 600 ⇄ 800 kbps per pair). Original W4 text: Raising the 3–4 tier (and the 360p rung) from 600 to 800 kbps is recommended, but it
   is a bandwidth trade-off for the owner to decide (below).
 
 ## Alternatives considered
@@ -99,7 +99,7 @@ Compare: trade-off, +5.9 VMAF for +32 % send. Selftest agrees: VP8 at 360p is 67
 | participants | max encode | cap / peer | fps | start bitrate | software codec order | status |
 |---|---|---|---|---|---|---|
 | 1–2 | 720p | 1500 kbps | 30 | 1500 | AV1, VP9, VP8, H264 | shipped |
-| 3–4 | 360p | 600 kbps (recommend 800) | 30 | = cap | VP8, AV1, VP9, H264 | 800 needs owner OK: 4-way upload 1.8 → 2.4 Mbps |
+| 3–4 | 360p | 600 / 800 kbps adaptive (ADR-0008) | 30 | = cap | VP8, AV1, VP9, H264 | adaptive per pair, ADR-0008 |
 | 5–10 | 180p | 150 kbps | 15 | 150 | VP8, VP9, H264, AV1 | shipped; 250 kbps would be +5.9 VMAF (VP8) at +900 kbps up for 10 people, not recommended |
 Ladder rung 360p: 600 kbps (recommend 800, together with the tier change).
 

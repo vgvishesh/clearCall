@@ -104,6 +104,8 @@ export class FakeSender {
     encodings: [{}],
   };
   setParametersCalls: unknown[] = [];
+  /** Behave like an engine whose setParameters rejects any degradationPreference. */
+  rejectDegradation = false;
   replaceTrackCalls: (FakeTrack | null)[] = [];
   streams: FakeMediaStream[] = [];
   constructor(public track: FakeTrack | null) {}
@@ -116,6 +118,7 @@ export class FakeSender {
   }
   async setParameters(p: typeof this.params) {
     if (p.encodings.length !== this.params.encodings.length) throw new Error("InvalidModificationError");
+    if (this.rejectDegradation && "degradationPreference" in p) throw new Error("NotSupportedError");
     this.setParametersCalls.push(p);
     this.params = { ...structuredClone(p), transactionId: nextId("t") };
   }

@@ -87,6 +87,8 @@ export function y4mInfo(file: string): { headerLen: number; frames: number; widt
 export interface VmafResult {
   vmaf_mean: number;
   vmaf_p5: number;
+  /** Mean VMAF over the second half of the aligned frames: steady state once adaptation (ramp, send level) settled. */
+  vmaf_late: number;
   vmaf_min: number;
   psnr_y: number;
   ssim: number;
@@ -168,11 +170,14 @@ export async function scoreVideo(
   };
   rmSync(refRaw, { force: true });
   rmSync(degRaw, { force: true });
-  const v = out.frames.map((f) => f.metrics.vmaf ?? 0).sort((a, b) => a - b);
+  const inOrder = out.frames.map((f) => f.metrics.vmaf ?? 0);
+  const late = inOrder.slice(Math.floor(inOrder.length / 2));
+  const v = [...inOrder].sort((a, b) => a - b);
   const pm = out.pooled_metrics;
   return {
     vmaf_mean: pm.vmaf?.mean ?? Number.NaN,
     vmaf_p5: v[Math.floor(v.length * 0.05)] ?? Number.NaN,
+    vmaf_late: late.length ? late.reduce((a, b) => a + b, 0) / late.length : Number.NaN,
     vmaf_min: pm.vmaf?.min ?? Number.NaN,
     psnr_y: pm.psnr_y?.mean ?? Number.NaN,
     ssim: pm.float_ssim?.mean ?? Number.NaN,

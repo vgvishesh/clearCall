@@ -219,6 +219,96 @@ describe("MeshTransport", () => {
     expect(done).toEqual(["Bob"]);
   });
 
+  it("adaptive send level (ADR-0008): sampler ticks upgrade a good pair to 800 kbps, a squeeze drops it fast", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    const b = addPeer(w, "Bob");
+    await settle(60);
+    addPeer(w, "Cid");
+    await settle(80);
+    // Every pair of Ann's reports a good link; Bob's pair later gets squeezed.
+    let bobEstimate = 1_400_000;
+    let bobLimit = "none";
+    for (const r of a.mesh.participants()) {
+      const pc = pcFor(a, r.id);
+      // Cid's engine rejects degradationPreference: its pair must still get the 800 kbps cap.
+      if (r.id !== b.id) pc.getTransceivers()[1]!.sender.rejectDegradation = true;
+      pc.statsFn = () =>
+        new Map<string, Record<string, unknown>>([
+          ["T", { type: "transport", selectedCandidatePairId: "CP" }],
+          [
+            "CP",
+            {
+              type: "candidate-pair",
+              availableOutgoingBitrate: r.id === b.id ? bobEstimate : 1_400_000,
+              currentRoundTripTime: 0.02,
+            },
+          ],
+          [
+            "OV",
+            {
+              type: "outbound-rtp",
+              kind: "video",
+              qualityLimitationReason: r.id === b.id ? bobLimit : "none",
+            },
+          ],
+          ["RIV", { type: "remote-inbound-rtp", kind: "video", fractionLost: 0 }],
+        ]);
+    }
+    const maxBitrate = (id: string) =>
+      pcFor(a, id).getTransceivers()[1]!.sender.params.encodings[0]!.maxBitrate;
+    const tick = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await a.mesh.stats("sampler");
+        await advanceAndSettle(w.clock, 1000, 1000);
+      }
+    };
+    const levels = async () => (await a.mesh.stats("qa")).map((s) => s.video.sendLevel);
+    await tick(10);
+    expect(await levels()).toEqual(["base", "base"]);
+    expect(maxBitrate(b.id)).toBe(600_000);
+    // a QA consumer's polls never drive the level
+    for (let i = 0; i < 30; i++) await a.mesh.stats("qa");
+    await tick(8); // 11 s hold done for the first pair, +5 s stagger for the second
+    expect(await levels()).toEqual(["high", "high"]);
+    const qa = await a.mesh.stats("qa");
+    expect(qa.map((s) => s.video.sendMaxBitrate)).toEqual([800_000, 800_000]);
+    expect(maxBitrate(b.id)).toBe(800_000);
+    const bobSender = () => pcFor(a, b.id).getTransceivers()[1]!.sender;
+    expect(bobSender().params.encodings[0]!.scaleResolutionDownBy).toBe(2);
+    expect(bobSender().params.degradationPreference).toBe("maintain-resolution");
+    const cid = qa.find((s) => s.id !== b.id)!.id;
+    expect(pcFor(a, cid).getTransceivers()[1]!.sender.params.degradationPreference).toBeUndefined();
+    // squeeze on Bob's pair only, past the grace period: down within 3 samples, Cid's pair untouched
+    await tick(6);
+    bobEstimate = 500_000;
+    bobLimit = "bandwidth";
+    await tick(3);
+    expect(await levels()).toEqual(["base", "high"]);
+    expect(maxBitrate(b.id)).toBe(600_000);
+    expect(bobSender().params.degradationPreference).toBe("balanced");
+  });
+
+  it("2-party calls have no send level and keep 1.5 Mbps", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann");
+    await settle(30);
+    const b = addPeer(w, "Bob");
+    await settle(60);
+    pcFor(a, b.id).statsFn = () =>
+      new Map<string, Record<string, unknown>>([
+        ["CP", { type: "candidate-pair", selected: true, availableOutgoingBitrate: 5_000_000 }],
+      ]);
+    for (let i = 0; i < 30; i++) {
+      await a.mesh.stats("sampler");
+      await advanceAndSettle(w.clock, 1000, 1000);
+    }
+    const [s] = await a.mesh.stats("qa");
+    expect(s!.video.sendLevel).toBeUndefined();
+    expect(s!.video.sendMaxBitrate).toBe(1_500_000);
+  });
+
   it("signaling drop + resume within grace keeps connected pairs untouched", async () => {
     const w = world();
     const a = addPeer(w, "Ann");

@@ -25,7 +25,15 @@ import {
   stopEnvelope,
 } from "./latency.ts";
 import { lossEmulation, lossEmuStats } from "./loss-emu.ts";
-import { adaptTimes, maxOrNull, mean, type QaStatsSample, sendSeries, summarizeTimeline } from "./metrics.ts";
+import {
+  adaptTimes,
+  maxOrNull,
+  mean,
+  type QaStatsSample,
+  sendLevelSummary,
+  sendSeries,
+  summarizeTimeline,
+} from "./metrics.ts";
 import {
   containerAppUrl,
   containerMediaPath,
@@ -391,6 +399,12 @@ export function buildMetrics(
   );
   pick(
     (d) => d.video,
+    "vmaf_late",
+    (v) => v.vmaf_late,
+    "min",
+  );
+  pick(
+    (d) => d.video,
     "delivery_ratio",
     (v) => v.alignment.delivery_ratio,
     "min",
@@ -465,6 +479,13 @@ export function buildMetrics(
     }
   }
   m.setup_success_rate = P.filter((p) => p.connected_ms !== null).length / profile.participants;
+  const lv = sendLevelSummary(s.timelines, s.t0);
+  if (lv.high_ratio !== null) {
+    m.send_level_high_ratio = lv.high_ratio;
+    m.send_level_high_ratio_late = lv.high_ratio_late;
+    m.send_level_first_high_s = lv.first_high_s;
+    m.send_level_changes_max = lv.changes_max;
+  }
 
   // bw_squeeze: uplink drop then recovery, measured on p0's send rate.
   const cps = changePoints(profile);

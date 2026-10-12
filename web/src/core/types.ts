@@ -238,6 +238,12 @@ export interface QaPeerStats {
     /** jitterBufferDelay / jitterBufferEmittedCount (ms). */
     jitterBufferMs?: number;
     codec?: string;
+    /** Receiver-reported loss of our video (remote-inbound-rtp fractionLost, 0..1). */
+    remoteFractionLost?: number;
+    /** Our adaptive send level to this peer (3–4 tier, ADR-0008): "base" 600 kbps or "high" 800 kbps. */
+    sendLevel?: "base" | "high";
+    /** The video maxBitrate we applied to this peer's encoding (bps). */
+    sendMaxBitrate?: number;
   };
   /** Derived kbps since the previous sample (both directions, audio+video). */
   inboundKbps?: number;

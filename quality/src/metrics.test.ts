@@ -1,6 +1,54 @@
 import { describe, expect, it } from "vitest";
 import { synthTimeline } from "./fixtures.ts";
-import { adaptTimes, firstTime, mean, percentile, sendSeries, summarizeTimeline } from "./metrics.ts";
+import {
+  adaptTimes,
+  firstTime,
+  mean,
+  percentile,
+  type QaStatsSample,
+  sendLevelSummary,
+  sendSeries,
+  summarizeTimeline,
+} from "./metrics.ts";
+
+describe("sendLevelSummary (ADR-0008)", () => {
+  const sample = (t: number, levels: Record<string, "base" | "high" | undefined>): QaStatsSample =>
+    ({
+      t,
+      local: {},
+      peers: Object.entries(levels).map(([id, sendLevel]) => ({
+        id,
+        name: "",
+        connectionState: "connected",
+        audio: {},
+        video: sendLevel ? { sendLevel } : {},
+      })),
+    }) as QaStatsSample;
+
+  it("ratio, late ratio, first upgrade and per-pair changes", () => {
+    // p0: pair a goes high at 10 s and stays; pair b flaps base→high→base→high
+    const p0 = Array.from({ length: 20 }, (_, i) =>
+      sample(1000 + i * 1000, {
+        a: i >= 9 ? "high" : "base",
+        b: [5, 6, 7, 8, 9].includes(i) || i >= 15 ? "high" : "base",
+      }),
+    );
+    const r = sendLevelSummary({ p0 }, 0);
+    expect(r.first_high_s).toBe(6);
+    expect(r.high_ratio).toBeCloseTo((11 + 10) / 40);
+    expect(r.high_ratio_late).toBeCloseTo((10 + 5) / 20);
+    expect(r.changes_max).toBe(3);
+  });
+
+  it("all null without levels (2-party / older builds)", () => {
+    expect(sendLevelSummary({ p0: [sample(0, { a: undefined })] }, 0)).toEqual({
+      high_ratio: null,
+      high_ratio_late: null,
+      first_high_s: null,
+      changes_max: null,
+    });
+  });
+});
 
 describe("basic stats", () => {
   it("mean and nearest-rank percentile", () => {

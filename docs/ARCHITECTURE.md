@@ -40,9 +40,10 @@ One deployable: the Worker serves the app and signaling from the same origin (no
 | Participants | Max encode | Max bitrate per peer | fps |
 |---|---|---|---|
 | 2 | 720p | 1500 kbps | 30 |
-| 3–4 | 360p | 600 kbps | 30 |
+| 3–4 | 360p | 600 kbps base / 800 kbps high (adaptive per pair, ADR-0008) | 30 |
 | 5–10 | 180p | 150 kbps | 15 |
-  Further capped by the receiver's `view` message (don't send 720p to a 120 px tile) and by `degradationPreference="balanced"`. Hidden tab ⇒ ask peers to pause our video.
+  Further capped by the receiver's `view` message (don't send 720p to a 120 px tile) and by `degradationPreference="balanced"` (the 3–4 high level uses `maintain-resolution`). Hidden tab ⇒ ask peers to pause our video.
+  3–4 send level (`web/src/core/adaptive.ts`, ADR-0008): per pair from the 1 Hz stats sampler — up after 10 s of uplink headroom (`availableOutgoingBitrate`), down within 3 s on estimate drop / loss / cpu; exposed as `video.sendLevel` in `__clearcall.stats()`.
 - **Active speaker:** from `audioLevel` in inbound-rtp stats (no extra AudioContext per peer).
 
 ## 4b. Transport (ADR-0006)

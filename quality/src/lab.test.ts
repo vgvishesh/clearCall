@@ -9,6 +9,7 @@ import type { VmafResult } from "./video.ts";
 const vmaf = (mean: number): VmafResult => ({
   vmaf_mean: mean,
   vmaf_p5: mean - 5,
+  vmaf_late: mean + 1,
   vmaf_min: mean - 10,
   psnr_y: 40,
   ssim: 0.98,

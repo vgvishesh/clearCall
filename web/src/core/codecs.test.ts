@@ -198,6 +198,9 @@ describe("forcedVideoOrder (?vcodec=)", () => {
     expect(videoLabFlags("?vstart=0")).toEqual({ vstart: 0 });
     expect(videoLabFlags("?qa=1&vstart=abc")).toEqual({});
     expect(videoLabFlags("?vstart=99999")).toEqual({});
+    expect(videoLabFlags("?vlevel=high")).toEqual({ vlevel: "high" });
+    expect(videoLabFlags("?vlevel=base")).toEqual({ vlevel: "base" });
+    expect(videoLabFlags("?vlevel=max")).toEqual({});
   });
   it("is null when absent or unknown (data-driven order stays)", () => {
     expect(forcedVideoOrder(undefined)).toBeNull();

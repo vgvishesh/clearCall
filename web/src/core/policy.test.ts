@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   audioPolicy,
+  hasLevels,
+  levelEligible,
   mergeAudioEncoding,
   mergeVideoEncoding,
   rungFor,
+  TIER4_HIGH_BITRATE,
   tierFor,
   videoPolicy,
   videoStartBitrateKbps,
   viewChanged,
   viewToReport,
+  withoutDegradation,
 } from "./policy.ts";
 
 describe("tierFor (ADR-0005 table)", () => {
@@ -161,5 +165,71 @@ describe("videoStartBitrateKbps", () => {
   it("lab override wins; 0 = libwebrtc default (no munging)", () => {
     expect(videoStartBitrateKbps(2, 800)).toBe(800);
     expect(videoStartBitrateKbps(2, 0)).toBeNull();
+  });
+});
+
+describe("3–4 tier send levels (ADR-0008)", () => {
+  it("high raises the bitrate (600 → 800 kbps) and holds resolution, never changes the scale", () => {
+    expect(TIER4_HIGH_BITRATE).toBe(800_000);
+    for (const participants of [3, 4]) {
+      const base = videoPolicy({ participants, sourceShortSide: 720 });
+      const high = videoPolicy({ participants, sourceShortSide: 720, level: "high" });
+      expect(base.maxBitrate).toBe(600_000);
+      expect(base.degradationPreference).toBeUndefined();
+      expect(high).toEqual({
+        ...base,
+        maxBitrate: TIER4_HIGH_BITRATE,
+        degradationPreference: "maintain-resolution",
+      });
+    }
+  });
+
+  it("merge: high sets maintain-resolution; leaving high restores balanced; base never touches it", () => {
+    const params = (dp?: string) =>
+      ({
+        transactionId: "t",
+        encodings: [{ active: true, maxBitrate: 600_000, maxFramerate: 30, scaleResolutionDownBy: 2 }],
+        ...(dp ? { degradationPreference: dp } : {}),
+      }) as unknown as RTCRtpSendParameters;
+    const base = videoPolicy({ participants: 3 });
+    const high = videoPolicy({ participants: 3, level: "high" });
+    expect(mergeVideoEncoding(params(), base)).toBeNull(); // base on a fresh sender: no call at all
+    const up = mergeVideoEncoding(params(), high) as RTCRtpSendParameters & {
+      degradationPreference?: string;
+    };
+    expect(up.degradationPreference).toBe("maintain-resolution");
+    expect(up.encodings[0]).toMatchObject({ maxBitrate: 800_000, scaleResolutionDownBy: 2 });
+    const down = mergeVideoEncoding(
+      { ...params("maintain-resolution"), encodings: [{ ...up.encodings[0]! }] } as RTCRtpSendParameters,
+      base,
+    ) as RTCRtpSendParameters & { degradationPreference?: string };
+    expect(down.degradationPreference).toBe("balanced");
+    expect(down.encodings[0]!.maxBitrate).toBe(600_000);
+    // fallback for engines that reject it: same encodings, preference as it was
+    const plain = withoutDegradation(up, params()) as RTCRtpSendParameters & {
+      degradationPreference?: string;
+    };
+    expect("degradationPreference" in plain).toBe(false);
+    expect(plain.encodings[0]!.maxBitrate).toBe(800_000);
+  });
+
+  it("high applies only when the receiver's tile wants the full 360p", () => {
+    expect(videoPolicy({ participants: 3, viewHeight: 1200, level: "high" }).maxBitrate).toBe(800_000);
+    expect(videoPolicy({ participants: 3, viewHeight: 300, level: "high" }).maxBitrate).toBe(800_000);
+    expect(videoPolicy({ participants: 3, viewHeight: 250, level: "high" }).maxBitrate).toBe(400_000);
+    expect(levelEligible(3, 270)).toBe(false);
+    expect(levelEligible(4, 360)).toBe(true);
+  });
+
+  it("2-party and 5–10 tiers ignore the level", () => {
+    expect(videoPolicy({ participants: 2, level: "high" })).toEqual(videoPolicy({ participants: 2 }));
+    expect(videoPolicy({ participants: 2, viewHeight: 300, level: "high" }).maxBitrate).toBe(600_000);
+    expect(videoPolicy({ participants: 6, level: "high" })).toEqual(videoPolicy({ participants: 6 }));
+    expect([1, 2, 5, 10].map(hasLevels)).toEqual([false, false, false, false]);
+    expect([3, 4].map(hasLevels)).toEqual([true, true]);
+  });
+
+  it("start bitrate stays at the base cap", () => {
+    expect(videoStartBitrateKbps(3)).toBe(600);
   });
 });

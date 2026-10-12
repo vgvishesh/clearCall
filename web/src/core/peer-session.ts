@@ -24,15 +24,18 @@ import {
   parsePeerMessage,
   type SignalPayload,
 } from "@clearcall/protocol";
+import type { SendLevel } from "./adaptive.ts";
 import type { Clock, TimerHandle } from "./clock.ts";
 import { applyCodecPreferences, type CodecLike, type CodecPrefs, codecTier } from "./codecs.ts";
 import { errInfo, type Logger, nullLogger, short } from "./log.ts";
 import {
   audioPolicy,
+  levelEligible,
   mergeAudioEncoding,
   mergeVideoEncoding,
   videoPolicy,
   videoStartBitrateKbps,
+  withoutDegradation,
 } from "./policy.ts";
 import { mungeDescription, sdpOrigin, sdpSessionId, withVideoStartBitrate } from "./sdp.ts";
 import type { AudioMode, PeerConnectionStatus } from "./types.ts";
@@ -134,6 +137,12 @@ export class PeerSession {
   private _receivedSignal = false;
   private remoteView: number | undefined;
   private participants = 2;
+  /** Adaptive send level to this peer (ADR-0008; the mesh decides it from stats). */
+  private _sendLevel: SendLevel = "base";
+  /** Video maxBitrate last applied to our sender (bps). */
+  private _videoMaxBitrate: number | undefined;
+  /** This engine rejected setParameters with a degradationPreference once: don't send it again. */
+  private degradationUnsupported = false;
   private paramsTail: Promise<void> = Promise.resolve();
   private readonly o: PeerSessionOptions & {
     log: Logger;
@@ -790,6 +799,37 @@ export class PeerSession {
     void this.applyEncodings();
   }
 
+  get sendLevel(): SendLevel {
+    return this._sendLevel;
+  }
+
+  /** Video maxBitrate currently applied to our sender (bps); undefined before the first negotiation. */
+  get videoMaxBitrate(): number | undefined {
+    return this._videoMaxBitrate;
+  }
+
+  /** Whether the high send level would change this pair's encode (3–4 tier, receiver wants 360p, sending). */
+  get levelEligible(): boolean {
+    const v = videoPolicy({
+      participants: this.participants,
+      viewHeight: this.remoteView,
+      sourceShortSide: this.o.local().sourceShortSide,
+    });
+    return v.active && levelEligible(this.participants, v.targetHeight);
+  }
+
+  /** Audio bitrate we send this peer (bps) — part of what the high level needs from the link. */
+  get audioBitrate(): number {
+    return audioPolicy(this.o.local().mode, this.o.codecPrefs?.audio).maxBitrate;
+  }
+
+  /** Adaptive send level (ADR-0008): only the video maxBitrate changes, never the scale. */
+  setSendLevel(level: SendLevel): Promise<void> {
+    if (level === this._sendLevel) return this.paramsTail;
+    this._sendLevel = level;
+    return this.applyEncodings();
+  }
+
   /** Read-modify-write sender parameters per policy; serialized (stale transactionIds throw). */
   applyEncodings(): Promise<void> {
     this.paramsTail = this.paramsTail.then(async () => {
@@ -799,8 +839,16 @@ export class PeerSession {
         participants: this.participants,
         viewHeight: this.remoteView,
         sourceShortSide: local.sourceShortSide,
+        level: this._sendLevel,
       });
-      await this.setParams(this.videoTx?.sender, (p) => mergeVideoEncoding(p, v), "video", v);
+      if (this.degradationUnsupported) delete v.degradationPreference;
+      const sender = this.videoTx?.sender;
+      await this.setParams(sender, (p) => mergeVideoEncoding(p, v), "video", {
+        ...v,
+        level: this._sendLevel,
+      });
+      const applied = sender?.getParameters?.().encodings?.[0]?.maxBitrate;
+      if (applied !== undefined) this._videoMaxBitrate = applied;
       const a = audioPolicy(local.mode, this.o.codecPrefs?.audio);
       await this.setParams(this.audioTx?.sender, (p) => mergeAudioEncoding(p, a.maxBitrate), "audio", a);
     });
@@ -819,7 +867,19 @@ export class PeerSession {
       if (!params.encodings?.length) return; // not negotiated yet
       const next = merge(params);
       if (!next) return;
-      await sender.setParameters(next);
+      try {
+        await sender.setParameters(next);
+      } catch (e) {
+        // An engine that rejects degradationPreference: apply the rest without it (bitrate still changes).
+        const plain = withoutDegradation(next, params);
+        if (JSON.stringify(plain) === JSON.stringify(next)) throw e;
+        this.log.warn("degradationPreference rejected; applying without it", {
+          peer: short(this.remoteId),
+          ...errInfo(e),
+        });
+        this.degradationUnsupported = true;
+        await sender.setParameters(plain);
+      }
       this.log.info("policy applied", { peer: short(this.remoteId), kind, ...caps });
     } catch (e) {
       this.log.warn("setParameters failed", { peer: short(this.remoteId), kind, ...errInfo(e) });

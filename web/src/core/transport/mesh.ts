@@ -10,11 +10,12 @@
  * negotiated (PeerSession decides).
  */
 import type { ErrorCode, PeerMessage, SignalPayload } from "@clearcall/protocol";
+import { type PairSample, SenderLevels, type SendLevel } from "../adaptive.ts";
 import type { Clock, TimerHandle } from "../clock.ts";
 import type { CodecLike, CodecPrefs } from "../codecs.ts";
 import { errInfo, type Logger, nullLogger, short } from "../log.ts";
 import { type LocalTracks, type PeerRole, PeerSession } from "../peer-session.ts";
-import { viewChanged, viewToReport } from "../policy.ts";
+import { hasLevels, viewChanged, viewToReport } from "../policy.ts";
 import { SerialQueue } from "../serial-queue.ts";
 import type { WelcomeInfo } from "../signaling-client.ts";
 import { summarizePeerStats } from "../stats.ts";
@@ -29,6 +30,9 @@ type Hidden = null | "probing" | "away";
  * Both arrive within one signaling round trip, so this only bounds the wait for a live peer whose hello is lost.
  */
 export const PROBE_MS = 2_000;
+
+/** The stats consumer whose 1 Hz calls drive the adaptive send level (the controller's StatsSampler). */
+export const ADAPT_CONSUMER = "sampler";
 
 interface Entry {
   id: string;
@@ -71,6 +75,8 @@ export interface MeshOptions {
   announce: () => LocalAnnounce;
   codecPrefs?: CodecPrefs;
   getCapabilities?: (kind: "audio" | "video") => { codecs: CodecLike[] } | null;
+  /** Lab A/B (`?vlevel=`): pin every eligible pair to this send level instead of adapting. */
+  levelOverride?: SendLevel;
   log?: Logger;
   /** Session tunables passthrough (tests). */
   sessionTunables?: Partial<{
@@ -93,6 +99,9 @@ export class MeshTransport implements MediaTransport {
   private closed = false;
   private lastAnnounce: string | null = null;
   private readonly log: Logger;
+  /** Adaptive send level per pair (ADR-0008) and the session each decision belongs to. */
+  private readonly levels = new SenderLevels();
+  private readonly levelSessions = new Map<string, PeerSession>();
 
   constructor(private readonly o: MeshOptions) {
     this.log = o.log ?? nullLogger;
@@ -270,6 +279,10 @@ export class MeshTransport implements MediaTransport {
     return m;
   }
 
+  /**
+   * Per-peer stats. The 1 Hz sampler's call (`consumer === ADAPT_CONSUMER`) also drives the adaptive send level
+   * (ADR-0008), so the level decision and the timeline tests read come from the same samples.
+   */
   async stats(consumer = "qa"): Promise<QaPeerStats[]> {
     const entries = [...this.roster.values()];
     const out = await Promise.all(
@@ -286,14 +299,63 @@ export class MeshTransport implements MediaTransport {
           );
           e.statsPrev.set(consumer, r.raw);
           if (r.quality !== e.info.quality && r.quality !== "unknown") this.update(e, { quality: r.quality });
-          return r.stats;
+          return { e, session: s, stats: r.stats };
         } catch (err) {
           this.log.debug("getStats failed", { peer: short(e.id), ...errInfo(err) });
           return null;
         }
       }),
     );
-    return out.filter((x): x is QaPeerStats => x !== null);
+    const got = out.filter((x) => x !== null);
+    if (consumer === ADAPT_CONSUMER && !this.closed) this.adaptLevels(got);
+    const levels = hasLevels(this.participantCount());
+    for (const { session, stats } of got) {
+      if (levels) stats.video.sendLevel = session.sendLevel;
+      if (session.videoMaxBitrate !== undefined) stats.video.sendMaxBitrate = session.videoMaxBitrate;
+    }
+    return got.map((x) => x.stats);
+  }
+
+  /** One adaptive-level tick over every pair we have stats for (ADR-0008, adaptive.ts). */
+  private adaptLevels(got: { e: Entry; session: PeerSession; stats: QaPeerStats }[]) {
+    const t = this.o.clock.now();
+    const samples = new Map<string, PairSample>();
+    for (const { e, session, stats } of got) {
+      if (e.session !== session) continue;
+      if (this.levelSessions.get(e.id) !== session) {
+        this.levels.reset(e.id); // new pc: fresh congestion controller, start at base
+        this.levelSessions.set(e.id, session);
+      }
+      samples.set(e.id, {
+        t,
+        eligible: stats.connectionState === "connected" && session.levelEligible,
+        estimateBps: stats.availableOutgoingBitrate,
+        limitation: stats.video.qualityLimitationReason,
+        lossFraction: stats.video.remoteFractionLost,
+        audioBps: session.audioBitrate,
+      });
+    }
+    for (const id of [...this.levelSessions.keys()]) if (!this.roster.has(id)) this.levelSessions.delete(id);
+    const pinned = this.o.levelOverride;
+    if (pinned) {
+      for (const [id, s] of samples)
+        void this.roster.get(id)?.session?.setSendLevel(s.eligible ? pinned : "base");
+      return;
+    }
+    for (const [id, ch] of this.levels.update(samples)) {
+      const s = samples.get(id)!;
+      const session = this.roster.get(id)?.session;
+      if (!session) continue;
+      this.log.info("send level", {
+        peer: short(id),
+        level: ch.level,
+        reason: ch.reason,
+        estimateKbps: s.estimateBps === undefined ? null : Math.round(s.estimateBps / 1000),
+        limitation: s.limitation ?? null,
+        loss: s.lossFraction ?? null,
+      });
+      void session.setSendLevel(ch.level);
+    }
   }
 
   onChange(cb: () => void): () => void {

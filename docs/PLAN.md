@@ -17,7 +17,7 @@ Per-feature plans: `docs/plans/<slug>.md`.
 
 ## Open decisions (owner)
 - TURN: owner creates a Realtime TURN key in the dashboard and sets TURN_KEY_ID + TURN_KEY_API_TOKEN secrets on clearcall-staging (wrangler OAuth lacks Realtime scope).
-- (decided 2026-10-12) Tier 3–4: owner wants BOTH 600 and 800 kbps, switched per user by available bandwidth — in progress (feat/adaptive-tier-cap).
+- (decided 2026-10-12) Tier 3–4: owner wants BOTH 600 and 800 kbps, switched per user by available bandwidth — implemented on feat/adaptive-tier-cap (ADR-0008); netem bw_squeeze/3g_lossy at 3 participants still to run.
 - Docker restarted by owner 2026-10-12: general images run; playwright base image still fails (overlay "too many levels of symbolic links") — netem image being rebuilt on ubuntu base (chore/netem-unblock).
 
 ## Log
@@ -28,3 +28,4 @@ Per-feature plans: `docs/plans/<slug>.md`.
 - 2026-10-12 — Firefox 3-party stall fixed: Firefox H264 sender stalls on mid-call resolution change; Gecko now ignores its H264 power-efficient claim (VP8/AV1 per tier), impolite-only re-offer on tier change. Firefox call-basic 20/20, Chromium 15/15, WebKit 6/6. Untested: Firefox paired with Safari/Chrome-HW-H264 (could still pick H264).
 - 2026-10-12 — Firefox reload flake fixed: Firefox never settles a getStats pending when its pc closes (ghost pair dropped after reload) → hung stats() and would stop the stats sampler mid-call in production. PeerSession rejects pending getStats on close/rebuild. Firefox reload 60/60 (was 25/30).
 - 2026-10-12 — Staging deployed: the staging Worker (workers.dev) (STUN only until TURN secrets set). E2E against staging: call-basic Chromium 3/3, Firefox 2/2, WebKit 2/2; full Chromium 15/15 (an earlier run at load avg 74 had 4 load-induced failures).
+- 2026-10-12 — 3–4 adaptive send level (ADR-0008, feat/adaptive-tier-cap): per pair 600 ⇄ 800 kbps from the 1 Hz stats sampler (up after 10 s headroom, down in ≤ 4 s), high = 800 kbps + maintain-resolution (an 800 cap alone left VP8 stuck at 270p). Unshaped 3-party VMAF 68.4 → 74.3/73.7 (steady state 75), send 1256 → 1590 kbps; 4-party 67.0 → 73.9, send +25 %, CPU/peer +10 pts. E2E squeeze (b=AS clamp) → base in 2.4–4.4 s. Exposed as `video.sendLevel` in QA stats/telemetry; lab reports `vmaf_late` + send-level summary.
