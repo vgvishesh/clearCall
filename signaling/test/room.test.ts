@@ -9,10 +9,12 @@ describe("worker routes", () => {
     expect(Object.keys(main).sort()).toEqual(["Room", "default"]);
   });
 
-  it("GET /api/health → 200 {ok:true}", async () => {
+  it("GET /api/health → 200 {ok:true, turn:<bool>}", async () => {
     const res = await worker.fetch("http://localhost/api/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    const body = (await res.json()) as { ok: boolean; turn: unknown };
+    expect(body.ok).toBe(true);
+    expect(typeof body.turn).toBe("boolean"); // depends on local .dev.vars; exact cases in health.test.ts
   });
 
   it("bad room id → 400 before touching a DO", async () => {

@@ -77,6 +77,8 @@ export interface MeshOptions {
   getCapabilities?: (kind: "audio" | "video") => { codecs: CodecLike[] } | null;
   /** Lab A/B (`?vlevel=`): pin every eligible pair to this send level instead of adapting. */
   levelOverride?: SendLevel;
+  /** TURN-only media (`?relay=1`): verifies a TURN setup; pairs can't connect if the Worker hands out no TURN. */
+  relayOnly?: boolean;
   log?: Logger;
   /** Session tunables passthrough (tests). */
   sessionTunables?: Partial<{
@@ -87,6 +89,11 @@ export interface MeshOptions {
     connectTimeoutMs: number;
     offerResendAfterMs: number;
   }>;
+}
+
+/** Any `turn:`/`turns:` URL among the ICE servers (the Worker adds them only when TURN secrets are configured). */
+export function hasTurn(servers: readonly RTCIceServer[]): boolean {
+  return servers.some((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => /^turns?:/.test(u)));
 }
 
 export class MeshTransport implements MediaTransport {
@@ -112,6 +119,8 @@ export class MeshTransport implements MediaTransport {
   welcome(info: WelcomeInfo, first: boolean): void {
     if (this.closed) return;
     this.iceServers = info.iceServers as RTCIceServer[];
+    if (this.o.relayOnly && !hasTurn(this.iceServers))
+      this.log.warn("relay-only requested but the server offered no TURN: pairs cannot connect");
     this.up = true;
     if (first || !info.resumed) {
       if (!first) {
@@ -459,6 +468,7 @@ export class MeshTransport implements MediaTransport {
       MediaStream: this.o.MediaStream,
       clock: this.o.clock,
       iceServers: () => this.iceServers,
+      ...(this.o.relayOnly ? { relayOnly: true } : {}),
       local: this.o.local,
       isSignalingUp: () => this.up,
       sendSignal: (p) => {

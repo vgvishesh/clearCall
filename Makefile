@@ -3,7 +3,7 @@ SHELL := /bin/bash
 PROFILE ?= 4g_typical
 N ?= 4
 DURATION ?= 60
-.PHONY: diag bundle-size doctor install verify fmt lint dev dev-stop web-build web-test signaling-test protocol-check e2e e2e-ui screenshots quality quality-all tunnel deploy-staging
+.PHONY: diag bundle-size doctor install verify fmt lint dev dev-stop web-build web-test signaling-test protocol-check e2e e2e-ui screenshots quality quality-all tunnel deploy-staging turn-setup turn-check
 
 doctor:          ; @scripts/doctor.sh
 install:         ; @pnpm install
@@ -27,3 +27,5 @@ quality-all:     ; @scripts/quality.sh all $(ARGS)
 
 tunnel:          ; @scripts/tunnel.sh          # public https URL to the local dev server for real-phone testing (asks owner)
 deploy-staging:  ; @scripts/deploy.sh staging
+turn-setup:      ; @scripts/turn.sh setup $(or $(ENV),staging)   # optional TURN relay: prompts for your Cloudflare TURN key
+turn-check:      ; @scripts/turn.sh check $(URL)                 # health turn:true + relay-only call connects via TURN

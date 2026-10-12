@@ -81,6 +81,8 @@ export interface PeerSessionOptions {
   clock: Clock;
   /** Latest ICE servers from `welcome` (read on every (re)start). */
   iceServers: () => RTCIceServer[];
+  /** `iceTransportPolicy: "relay"` — TURN only (`?relay=1`, TURN setup check). */
+  relayOnly?: boolean;
   local: () => LocalTracks;
   sendSignal: (payload: SignalPayload) => void;
   isSignalingUp: () => boolean;
@@ -222,7 +224,11 @@ export class PeerSession {
 
   private createPc() {
     const { RTCPeerConnection: PC, log } = this.o;
-    const pc = new PC({ iceServers: this.o.iceServers(), bundlePolicy: "max-bundle" });
+    const pc = new PC({
+      iceServers: this.o.iceServers(),
+      bundlePolicy: "max-bundle",
+      ...(this.o.relayOnly ? { iceTransportPolicy: "relay" as const } : {}),
+    });
     this.pc = pc;
     this.bound = false;
     this.negotiatedOnce = false;

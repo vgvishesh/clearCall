@@ -1,0 +1,4 @@
+# Copy to signaling/.dev.vars (gitignored) for local `make dev`. Everything here is optional.
+# TURN relay (Cloudflare dashboard → Realtime → TURN Server → Create). Leave unset for STUN-only (direct P2P).
+TURN_KEY_ID=
+TURN_KEY_API_TOKEN=

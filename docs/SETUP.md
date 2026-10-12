@@ -1,26 +1,58 @@
-# Owner setup checklist
+# Setup
 
-`make doctor` checks all of this. Items marked 💳 cost money; ⛔ blocks progress.
+Clearcall is a web app (PWA) plus one Cloudflare Worker. Everything fits Cloudflare's free tier.
+`make doctor` checks the toolchain. (Native iOS/Android plans are parked in `docs/paused-native/`.)
 
-## Mac toolchain
-- ⛔ **macOS 15.6+** (this Mac is 15.5) — required by current Xcode.
-- ⛔ **Xcode 26.x** (installed: 13.1, from 2021). App Store uploads have required the iOS 26 SDK since 2026-04-28. Install via the App Store or `xcodes`, then `sudo xcode-select -s /Applications/Xcode.app` and `xcodebuild -runFirstLaunch`. Install an iOS 26 simulator runtime.
-- ⛔ **Android SDK**: Android Studio (or `brew install --cask android-commandlinetools`), then `sdkmanager "platform-tools" "emulator" "platforms;android-36" "build-tools;36.0.0" "system-images;android-36;google_apis;arm64-v8a"`. Export `ANDROID_HOME=$HOME/Library/Android/sdk` and add `platform-tools`, `emulator` to PATH.
-- **JDK 21** (`brew install --cask temurin@21`). Java 25 is installed but Android Gradle Plugin is happiest on 17/21.
-- `brew install xcodegen swiftlint swift-format ktlint ffmpeg uv` and `brew install mobile-dev-inc/tap/maestro` (or `curl -Ls https://get.maestro.mobile.dev | bash`).
-- `npm i -g wrangler` (or use `npx wrangler` from `signaling/`).
-- Docker Desktop running (quality lab network impairment).
+## Toolchain
+- **Node ≥ 22** and **pnpm 10** (`corepack enable`), then `make install`.
+- Playwright browsers for E2E: `pnpm --filter @clearcall/e2e exec playwright install chromium firefox webkit`.
+- Quality lab only: `ffmpeg` (with libvmaf) and `uv` (`brew install ffmpeg uv`); Docker Desktop for shaped-network
+  (netem) profiles.
 
-## Accounts
-- 💳⛔ **Apple Developer Program** ($99/yr) — required for PushKit VoIP push, CallKit on real devices beyond 7-day dev signing, TestFlight. Create an **APNs auth key (.p8)**; keep it out of the repo.
-- 💳 **Google Play Console** ($25 once). **Firebase** project (free) for FCM; download `google-services.json` (gitignored).
-- **Cloudflare** account (free): Workers, Durable Objects, Realtime (SFU + TURN, 1,000 GB/mo free). Create an API token scoped to Workers + Realtime; `wrangler login`.
-- **GitHub** repo (private) for CI. Note: macOS runner minutes count 10× on private repos.
-- Optional: Firebase Test Lab (free daily quota) or BrowserStack for remote device runs.
+## Run locally
+```
+make dev      # builds web/ and runs the Worker at http://localhost:8787 (app + signaling)
+make verify   # format, lint, typecheck, unit tests
+make e2e      # multi-browser call tests against the local Worker
+```
+Camera/mic need a secure context: `localhost` works; for phones on your LAN use `make tunnel` (HTTPS URL).
 
-## Devices
-- ⛔ for M3+: at least **1 iPhone + 1 Android phone** (camera, echo cancellation, hardware codecs, CallKit and push cannot be validated on simulators). Ideal: 2 of each plus one low-end Android (that's the real quality bar).
-- Wired headphones/earbuds and a speaker to test music mode and echo.
+## Deploy your own (free)
+1. Cloudflare account (free) → `cd signaling && npx wrangler login`.
+2. `make deploy-staging` → prints `https://clearcall-staging.<your-subdomain>.workers.dev`.
+3. Open it, **Start a call**, share the link. Production: `scripts/deploy.sh production` (worker name `clearcall`).
 
-## Secrets (never in git; agents are blocked from reading them)
-`signaling/.dev.vars` (local Worker secrets), `android/app/google-services.json`, `ios/Config/Secrets.xcconfig`, `*.p8`, `*.jks`.
+That's a complete deployment: calls connect directly between devices (STUN). Nothing else is required.
+
+## TURN (optional)
+**What it is.** Most devices sit behind a router (NAT). STUN lets two devices discover their public addresses and
+connect directly — that works for most calls. Strict NATs (some mobile carriers, CGNAT), office/school firewalls and
+some hotel Wi-Fi block direct connections; those calls **fail to connect** without a relay. A TURN server is that
+relay: both devices connect *out* to it (allowed even on strict networks, including TLS on port 443) and it forwards
+the media. Media stays end-to-end encrypted (DTLS-SRTP), so the relay only sees ciphertext. The browser uses TURN only
+when a direct route fails; Clearcall's code never forces it.
+
+**Cost.** Cloudflare Realtime TURN: 1,000 GB/month free, then pay-as-you-go. Only relayed calls count.
+
+**How Clearcall uses it.** The Worker holds a TURN key as two secrets and mints short-lived (12 h) TURN credentials
+for each call (`signaling/src/ice.ts`), rate-limited per IP. No secrets reach browsers or the repo. Without the
+secrets the Worker hands out STUN only — the app works exactly as before.
+
+**Enable it**
+1. Cloudflare dashboard → **Realtime** → **TURN Server** → **Create**. Copy the **Turn Token ID** and the
+   **API Token** (shown once).
+2. `make turn-setup ENV=staging` — prompts for both values and stores them as Worker secrets
+   (`TURN_KEY_ID`, `TURN_KEY_API_TOKEN`). Takes effect immediately; no redeploy.
+3. `make turn-check URL=https://clearcall-staging.<your-subdomain>.workers.dev` — checks `/api/health` reports
+   `"turn":true`, then runs a relay-only 2-party call (`?relay=1`) that can only connect through TURN.
+
+Disable: `scripts/turn.sh remove staging`. Local dev: copy `signaling/.dev.vars.example` to `signaling/.dev.vars`.
+Debug any deployment: open a call with `?relay=1` to force TURN; `?qa=1` then `__clearcall.stats()` shows each
+pair's `candidateType` (`relay` = via TURN, `host`/`srflx` = direct).
+
+## Real devices
+At least one iPhone and one Android phone (cameras, echo cancellation, hardware codecs and mobile networks can't be
+validated in emulators). Headphones and a speaker to test Music mode and echo.
+
+## Secrets
+Never in git: `signaling/.dev.vars`, Cloudflare tokens. Agents are blocked from reading them (`.claude/hooks/`).

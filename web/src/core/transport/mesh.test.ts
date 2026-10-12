@@ -7,7 +7,7 @@ import { advanceAndSettle, FakeClock, settle } from "../testing/fake-clock.ts";
 import { FakeSignalingServer } from "../testing/fake-signaling.ts";
 import { asFake, createFakeRtc, FakeMediaStream, FakeTrack } from "../testing/fake-webrtc.ts";
 import { testLog } from "../testing/test-log.ts";
-import { MeshTransport, PROBE_MS } from "./mesh.ts";
+import { hasTurn, type MeshOptions, MeshTransport, PROBE_MS } from "./mesh.ts";
 import type { LocalAnnounce } from "./types.ts";
 
 let cipher: SignalCipher;
@@ -30,7 +30,7 @@ interface P {
   welcomes: number;
 }
 
-function addPeer(w: World, name: string, id = generatePeerId()): P {
+function addPeer(w: World, name: string, id = generatePeerId(), extra: Partial<MeshOptions> = {}): P {
   const audio = new FakeTrack("audio");
   const video = new FakeTrack("video");
   const p = {
@@ -55,6 +55,7 @@ function addPeer(w: World, name: string, id = generatePeerId()): P {
     local: () => p.local,
     announce: () => p.announce,
     log,
+    ...extra,
   });
   p.client = new SignalingClient({
     url: "ws://t/api/room/r",
@@ -109,6 +110,25 @@ function expectFullMesh(peers: P[]) {
     }
   }
 }
+
+describe("TURN", () => {
+  it("hasTurn recognises turn:/turns: URLs only", () => {
+    expect(hasTurn([{ urls: "stun:stun.cloudflare.com:3478" }])).toBe(false);
+    expect(hasTurn([{ urls: ["stun:a", "turns:turn.example:443?transport=tcp"] }])).toBe(true);
+    expect(hasTurn([{ urls: "turn:turn.example:3478" }])).toBe(true);
+    expect(hasTurn([])).toBe(false);
+  });
+
+  it("relayOnly puts iceTransportPolicy=relay on every pc; default leaves the browser free to go direct", async () => {
+    const w = world();
+    const a = addPeer(w, "Ann", generatePeerId(), { relayOnly: true });
+    await settle(30);
+    const b = addPeer(w, "Bob");
+    await settle(60);
+    expect(pcFor(a, b.id).config.iceTransportPolicy).toBe("relay");
+    expect(pcFor(b, a.id).config.iceTransportPolicy).toBeUndefined();
+  });
+});
 
 describe("MeshTransport", () => {
   it("3 participants join one after another: full mesh, newcomer offers, names via hello/state", async () => {

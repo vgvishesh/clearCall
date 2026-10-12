@@ -36,7 +36,8 @@ fi
 # Disk guard: image pulls/builds once filled the shared disk. Pulls/builds need MIN_FREE_GB (default 15); running an
 # already-built image only writes small container layers, so runs need MIN_RUN_FREE_GB (default 8; owner, 2026-10-12).
 min_gb=""
-if grep -Eq 'docker\s+(build|pull|buildx\s+build|compose\s+.*(build|pull))' <<<"$cmd"; then min_gb=${MIN_FREE_GB:-15}
+# \b so "docker builder prune" is not mistaken for a build.
+if grep -Eq 'docker\s+(build|pull|buildx\s+build|compose\s+.*(build|pull))\b' <<<"$cmd"; then min_gb=${MIN_FREE_GB:-15}
 elif grep -Eq 'docker\s+(run\s|compose\s+.*up)' <<<"$cmd"; then min_gb=${MIN_RUN_FREE_GB:-8}; fi
 if [[ -n "$min_gb" ]]; then
   free_gb=$(df -g / 2>/dev/null | awk 'NR==2{print $4}')

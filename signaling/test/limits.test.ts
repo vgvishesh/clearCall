@@ -104,7 +104,10 @@ describe("rate limit over WebSockets", () => {
     const room = newRoomId();
     const [a] = await joined(room);
     const [b] = await joined(room);
-    for (let i = 0; i < RATE_LIMIT_BURST + RATE_LIMIT_ABUSE_STRIKES + 100; i++) a.signal(b.peerId, "x");
+    // Tokens refill (50/s) and strikes drain (10/s) while the server works through the flood, so the margin over
+    // BURST + STRIKES must cover slow delivery: +100 tripped only if all frames landed within ~1.7 s (flaky on a
+    // loaded host); +2000 still trips if delivery takes up to ~35 s.
+    for (let i = 0; i < RATE_LIMIT_BURST + RATE_LIMIT_ABUSE_STRIKES + 2000; i++) a.signal(b.peerId, "x");
     expect((await a.closedP).code).toBe(CLOSE.ABUSE);
     const away = await runInDurableObject(env.ROOM.getByName(room), (_i, s) =>
       s.storage.kv.get(`away:${a.peerId}`),

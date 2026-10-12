@@ -8,7 +8,9 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
-    if (path === "/api/health") return Response.json({ ok: true });
+    // `turn` says whether TURN secrets are configured (never their values) — `make turn-check` reads it.
+    if (path === "/api/health")
+      return Response.json({ ok: true, turn: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) });
 
     const m = path.match(/^\/api\/room\/([^/]+)$/);
     if (m) {

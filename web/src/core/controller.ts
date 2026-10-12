@@ -380,6 +380,7 @@ class Controller implements CallController {
       codecPrefs: { red: d.flags.red, videoOrder, videoStartKbps: d.flags.vstart, audio: d.flags.audio },
       getCapabilities: d.getCapabilities,
       ...(d.flags.vlevel ? { levelOverride: d.flags.vlevel } : {}),
+      ...(d.flags.relayOnly ? { relayOnly: true } : {}),
       log: this.log.scope("peer"),
     });
     this.transport = transport;

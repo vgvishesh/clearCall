@@ -51,6 +51,8 @@ export interface CoreFlags {
   vstart?: number | undefined;
   /** Pin the 3–4 tier send level (`?vlevel=base|high`, ADR-0008) instead of adapting — quality lab A/B only. */
   vlevel?: "base" | "high" | undefined;
+  /** Relay-only ICE (`?relay=1`): media must go through TURN — verifies a TURN setup; fails without TURN. */
+  relayOnly?: boolean;
   /** Mirror debug logs to the console (`?debug=1`). */
   debug: boolean;
   /** Install window.__clearcall (`?qa=1`). */
@@ -102,7 +104,14 @@ function flagsFrom(search: string): CoreFlags {
   }
   const on = (k: string) => p.get(k) === "1";
   const audio = audioTuningFrom(p);
-  return { red: on("red"), debug: on("debug"), qa: on("qa"), telemetry: true, ...(audio ? { audio } : {}) };
+  return {
+    red: on("red"),
+    debug: on("debug"),
+    qa: on("qa"),
+    telemetry: true,
+    ...(on("relay") ? { relayOnly: true } : {}),
+    ...(audio ? { audio } : {}),
+  };
 }
 
 /** `?abr=40000&mabr=96000&ns=0&agc=0&ec=0&dtx=0&fec=0&mstereo=1` → AudioTuning (only the keys present and valid); else undefined. */
