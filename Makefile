@@ -22,8 +22,8 @@ e2e:             ; @scripts/e2e.sh $(ARGS)     # e.g. make e2e ARGS="--project=c
 screenshots:     ; @scripts/e2e.sh --project=screens
 diag:            ; @scripts/diag.sh N=$(N) DURATION=$(DURATION) $(ARGS)   # N-party headless call → debug bundle
 bundle-size:     ; @scripts/bundle-size.sh
-quality:         ; @scripts/quality.sh $(PROFILE)
-quality-all:     ; @scripts/quality.sh all
+quality:         ; @scripts/quality.sh $(PROFILE) $(ARGS)   # e.g. make quality PROFILE=3g_lossy ARGS=--netem
+quality-all:     ; @scripts/quality.sh all $(ARGS)
 
 tunnel:          ; @scripts/tunnel.sh          # public https URL to the local dev server for real-phone testing (asks owner)
 deploy-staging:  ; @scripts/deploy.sh staging

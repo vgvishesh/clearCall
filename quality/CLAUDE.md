@@ -21,7 +21,7 @@ Load the `quality-lab` skill.
 | `tsx src/netem-check.ts --profile 3g_lossy` | verify tc netem shaping on Docker (alpine peers, ping RTT/loss) |
 | `make diag N=4 DURATION=60 ARGS="--fault drop-signaling@20s"` | debug bundle → `reports/diag-<ts>/summary.md` |
 Python scorers (`scorers/*.py`) run via `uv run --script` (PEP 723 deps); the DNSMOS model downloads to `.cache/models/`.
-Docker Desktop's VM lacks `ifb`, so `--netem` shapes uplink only (reported). The netem image (Playwright 1.64 base) needs ~6 GB disk.
+Docker Desktop's VM lacks `ifb`, so `--netem` shapes uplink only (reported). The netem image `clearcall-lab-peer:1.64.0` (ubuntu:24.04 + Node + Playwright 1.64 headless shell, one layer; built on first `--netem` run) needs ~1 GB inside the Docker VM; run `make quality PROFILE=<p> ARGS=--netem`. Peers load the app at `http://localhost:<port>` via an in-container TCP forwarder (secure context; chrome-headless-shell ignores the insecure-origin flag), run-server needs `--unsafe` to accept launch args, and TCP sport 3000 (Playwright control, recordings) bypasses the shaped band.
 
 ## Reference corpus (owner adds; record source + license for each file)
 - Speech: VCTK / LibriSpeech (CC-BY); noisy speech: Microsoft DNS Challenge corpus (CC-BY).

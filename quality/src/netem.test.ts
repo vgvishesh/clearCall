@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   containerAppUrl,
   containerMediaPath,
+  egressBypassSetup,
   egressNetem,
+  forwarderCmd,
   gilbertParams,
+  hostLoopbackPort,
   ingressNetem,
   ingressSetup,
   queueLimit,
+  RUN_SERVER_CMD,
 } from "./netem.ts";
 import { linkAt, loadProfile } from "./profiles.ts";
 import { MEDIA_DIR } from "./util.ts";
@@ -39,6 +43,19 @@ describe("netem command builder", () => {
     expect(cmd).toBe("tc qdisc change dev eth0 root netem rate 1000kbit limit 50");
   });
 
+  it("keeps the Playwright control port out of the shaped band", () => {
+    const [prio, filter] = egressBypassSetup(3000).map((c) => c.join(" "));
+    expect(prio).toBe(
+      `tc qdisc add dev eth0 root handle 1: prio bands 3 priomap ${Array(16).fill(2).join(" ")}`,
+    );
+    expect(filter).toBe(
+      "tc filter add dev eth0 parent 1: protocol ip prio 1 u32 match ip sport 3000 0xffff flowid 1:1",
+    );
+    expect(egressNetem(loadProfile("4g_typical").link, "change", "eth0", true).join(" ")).toMatch(
+      /^tc qdisc change dev eth0 parent 1:3 handle 30: netem delay 50ms/,
+    );
+  });
+
   it("follows a schedule (bw_squeeze)", () => {
     const p = loadProfile("bw_squeeze");
     expect(egressNetem(linkAt(p, 31), "change").join(" ")).toContain("rate 250kbit");
@@ -60,11 +77,21 @@ describe("netem command builder", () => {
 
 describe("container addressing", () => {
   it("maps localhost to host.docker.internal and marks it secure", () => {
-    expect(containerAppUrl("http://localhost:8791")).toEqual({
-      url: "http://host.docker.internal:8791",
-      args: ["--unsafely-treat-insecure-origin-as-secure=http://host.docker.internal:8791"],
+    expect(containerAppUrl("http://localhost:8791/c?x")).toEqual({ url: "http://localhost:8791", args: [] });
+    expect(containerAppUrl("http://127.0.0.1:8791").url).toBe("http://localhost:8791");
+    expect(containerAppUrl("https://staging.example.com/x")).toEqual({
+      url: "https://staging.example.com",
+      args: [],
     });
-    expect(containerAppUrl("https://staging.example.com/x").args).toEqual([]);
+    expect(hostLoopbackPort("http://localhost:8800")).toBe(8800);
+    expect(hostLoopbackPort("https://staging.example.com")).toBeNull();
+  });
+  it("forwards the host app port inside the container and lets clients pass launch args", () => {
+    const [bin, flag, js] = forwarderCmd(8800);
+    expect([bin, flag]).toEqual(["node", "-e"]);
+    expect(js).toContain('n.connect(8800,"host.docker.internal")');
+    expect(js).toContain('.listen(8800,"127.0.0.1")');
+    expect(RUN_SERVER_CMD).toContain("--unsafe");
   });
   it("maps cache media into /media", () => {
     expect(containerMediaPath(`${MEDIA_DIR}/talking_head.y4m`)).toBe("/media/talking_head.y4m");

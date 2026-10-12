@@ -96,7 +96,7 @@ async function main(): Promise<number> {
     const c = containerAppUrl(url);
     appUrl = c.url;
     extraArgs = c.args;
-    for (let i = 0; i < n; i++) containers.push(await startPeerContainer(i, linkAt(profile, 0)));
+    for (let i = 0; i < n; i++) containers.push(await startPeerContainer(i, linkAt(profile, 0), url));
     shaping = `netem ${profile.name}${containers.some((x) => !x.ingressShaped) ? " (uplink only)" : ""}`;
   }
 

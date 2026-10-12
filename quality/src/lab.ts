@@ -158,7 +158,8 @@ export async function runSession(
       appUrl = c.url;
       extraArgs = c.args;
       mediaPaths = { video: containerMediaPath(videoRef), audio: containerMediaPath(audioRef) };
-      for (let i = 0; i < n; i++) containers.push(await startPeerContainer(i, linkAt(profile, 0)));
+      for (let i = 0; i < n; i++)
+        containers.push(await startPeerContainer(i, linkAt(profile, 0), opts.appUrl));
       if (containers.some((c) => !c.ingressShaped))
         notes.push(
           "downlink (down_kbps) NOT shaped: ifb unavailable in the Docker VM kernel; uplink shaping only",
