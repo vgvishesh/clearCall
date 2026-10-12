@@ -82,9 +82,21 @@ export function mungeVideoFmtp(sdp: string, params: FmtpParams): string {
 export function withVideoStartBitrate<T extends { type: RTCSdpType; sdp?: string | undefined }>(
   desc: T,
   startKbps: number | null,
+  minKbps?: number | null,
+  maxKbps?: number | null,
 ): T {
-  if (desc.type === "rollback" || !desc.sdp || !startKbps) return desc;
-  return { ...desc, sdp: mungeVideoFmtp(desc.sdp, { "x-google-start-bitrate": Math.round(startKbps) }) };
+  if (desc.type === "rollback" || !desc.sdp || (!startKbps && !minKbps && !maxKbps)) return desc;
+  const p: FmtpParams = {};
+  if (startKbps) p["x-google-start-bitrate"] = Math.round(startKbps);
+  const shared: FmtpParams = {};
+  if (minKbps) shared["x-google-min-bitrate"] = Math.round(minKbps);
+  if (maxKbps) shared["x-google-max-bitrate"] = Math.round(maxKbps);
+  let sdp = mungeVideoFmtp(desc.sdp, { ...p, ...shared });
+  // libwebrtc's audio channel also pushes its codec's SDP bitrate config to the shared transport controller (last
+  // writer wins), so floor and ceiling must be on Opus too or the audio channel resets them (lab: the answerer
+  // lost the floor). The Opus encoder bitrate itself is set by setParameters, not by these.
+  if (Object.keys(shared).length) sdp = mungeOpusFmtp(sdp, shared);
+  return { ...desc, sdp };
 }
 
 /** Set (add or replace) fmtp parameters for every payload type whose rtpmap line matches `rtpmap` (group 1 = PT). */

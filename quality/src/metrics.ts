@@ -41,6 +41,24 @@ export interface RemoteSummary {
   quality_limitation: Record<string, number>;
   codec_video: string | null;
   codec_audio: string | null;
+  /** Our video payload to this remote incl. retransmissions (outbound bytesSent), kbps over the window. */
+  video_send_kbps: number | null;
+  /** Of which RTX retransmissions (retransmittedBytesSent), kbps. */
+  rtx_send_kbps: number | null;
+  /** RTP header bytes of our video (headerBytesSent; not in send_kbps), kbps. */
+  video_header_kbps: number | null;
+  /** Mean encoder target (outbound targetBitrate), kbps. */
+  video_target_kbps_mean: number | null;
+  /** Mean encoded frame rate of our stream to this remote. */
+  sent_fps_mean: number | null;
+  /** Keyframes we encoded / PLIs and NACKs this remote sent us, over the window. */
+  keyframes_encoded: number | null;
+  pli_received: number | null;
+  nack_received: number | null;
+  /** Receiver side: lost / (lost + received) video packets, FEC packets / received, RTX bytes / received bytes. */
+  video_loss_ratio: number | null;
+  fec_recv_ratio: number | null;
+  rtx_recv_ratio: number | null;
 }
 
 export interface TimelineSummary {
@@ -123,7 +141,40 @@ function remoteSummary(id: string, rows: { t: number; p: QaPeerStats }[]): Remot
     quality_limitation: ql,
     codec_video: last?.video.codec ?? null,
     codec_audio: last?.audio.codec ?? null,
+    video_send_kbps: kbpsOver(increase(rows.map((r) => r.p.video.bytesSent)), span),
+    rtx_send_kbps: kbpsOver(increase(rows.map((r) => r.p.video.retransmittedBytesSent)), span),
+    video_header_kbps: kbpsOver(increase(rows.map((r) => r.p.video.headerBytesSent)), span),
+    video_target_kbps_mean: ((m) => (m === null ? null : m / 1000))(
+      mean(nums(rows.map((r) => r.p.video.targetBitrate))),
+    ),
+    sent_fps_mean: mean(nums(rows.map((r) => r.p.video.sentFramesPerSecond))),
+    keyframes_encoded: increase(rows.map((r) => r.p.video.keyFramesEncoded)),
+    pli_received: increase(rows.map((r) => r.p.video.pliReceived)),
+    nack_received: increase(rows.map((r) => r.p.video.nackReceived)),
+    video_loss_ratio: ratioOf(
+      increase(rows.map((r) => r.p.video.packetsLost)),
+      increase(rows.map((r) => r.p.video.packetsReceived)),
+      true,
+    ),
+    fec_recv_ratio: ratioOf(
+      increase(rows.map((r) => r.p.video.fecPacketsReceived)),
+      increase(rows.map((r) => r.p.video.packetsReceived)),
+    ),
+    rtx_recv_ratio: ratioOf(
+      increase(rows.map((r) => r.p.video.retransmittedBytesReceived)),
+      increase(rows.map((r) => r.p.video.bytesReceived)),
+    ),
   };
+}
+
+const kbpsOver = (bytes: number | null, span: number): number | null =>
+  bytes !== null && span > 0 ? (bytes * 8) / 1000 / span : null;
+
+/** a / b (or a / (a + b) when `ofTotal`); null when either is missing or the denominator is 0. */
+function ratioOf(a: number | null, b: number | null, ofTotal = false): number | null {
+  if (a === null || b === null) return null;
+  const d = ofTotal ? a + b : b;
+  return d > 0 ? a / d : null;
 }
 
 /**

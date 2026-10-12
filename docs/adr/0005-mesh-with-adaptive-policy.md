@@ -1,6 +1,6 @@
 # 0005 — Full mesh up to 10 with a participant-count bandwidth policy
 
-- Status: Accepted (V1); 3–4 tier cap amended by ADR-0008
+- Status: Accepted (V1); 3–4 tier cap amended by ADR-0008; congestion-controller floor/ceiling added by ADR-0009
 - Date: 2026-10-11
 
 ## Context

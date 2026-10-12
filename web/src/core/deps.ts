@@ -53,6 +53,14 @@ export interface CoreFlags {
   vlevel?: "base" | "high" | undefined;
   /** Relay-only ICE (`?relay=1`): media must go through TURN — verifies a TURN setup; fails without TURN. */
   relayOnly?: boolean;
+  /** Congestion-controller floor in kbps (`?vmin=`, `x-google-min-bitrate`) — quality lab experiments only. */
+  vmin?: number | undefined;
+  /** Video receiver jitterBufferTarget in ms (`?jbt=`) — quality lab experiments only. */
+  jbt?: number | undefined;
+  /** Congestion-controller ceiling in kbps (`?vmax=`, 0 = none) — quality lab A/B only. */
+  vmax?: number | undefined;
+  /** Video scalabilityMode (`?svc=L1T2|L1T3`) — quality lab experiments only. */
+  svc?: string | undefined;
   /** Mirror debug logs to the console (`?debug=1`). */
   debug: boolean;
   /** Install window.__clearcall (`?qa=1`). */
@@ -139,18 +147,27 @@ export function audioTuningFrom(p: URLSearchParams): AudioTuning | undefined {
  * Video lab overrides: `?vcodec=vp8|vp9|h264|av1` (validated by codecs.forcedVideoOrder), `?vstart=<kbps>`
  * (0…10000) and `?vlevel=base|high`. Absent/invalid → not set, so defaults stay data-driven.
  */
-export function videoLabFlags(search: string): Pick<CoreFlags, "vcodec" | "vstart" | "vlevel"> {
+type VideoLabFlags = Pick<CoreFlags, "vcodec" | "vstart" | "vlevel" | "vmin" | "vmax" | "jbt" | "svc">;
+export function videoLabFlags(search: string): VideoLabFlags {
   let p: URLSearchParams;
   try {
     p = new URLSearchParams(search);
   } catch {
     return {};
   }
-  const out: Pick<CoreFlags, "vcodec" | "vstart" | "vlevel"> = {};
+  const out: VideoLabFlags = {};
   const vcodec = p.get("vcodec")?.toLowerCase();
   if (vcodec) out.vcodec = vcodec;
   const vstart = Number(p.get("vstart"));
   if (p.has("vstart") && Number.isInteger(vstart) && vstart >= 0 && vstart <= 10_000) out.vstart = vstart;
+  const vmin = Number(p.get("vmin"));
+  if (p.has("vmin") && Number.isInteger(vmin) && vmin >= 0 && vmin <= 5_000) out.vmin = vmin;
+  const vmax = Number(p.get("vmax"));
+  if (p.has("vmax") && Number.isInteger(vmax) && vmax >= 0 && vmax <= 20_000) out.vmax = vmax;
+  const jbt = Number(p.get("jbt"));
+  if (p.has("jbt") && Number.isInteger(jbt) && jbt >= 0 && jbt <= 4_000) out.jbt = jbt;
+  const svc = p.get("svc");
+  if (svc === "L1T1" || svc === "L1T2" || svc === "L1T3") out.svc = svc;
   const vlevel = p.get("vlevel");
   if (vlevel === "base" || vlevel === "high") out.vlevel = vlevel;
   return out;

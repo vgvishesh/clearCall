@@ -13,6 +13,7 @@ import type { ErrorCode, PeerMessage, SignalPayload } from "@clearcall/protocol"
 import { type PairSample, SenderLevels, type SendLevel } from "../adaptive.ts";
 import type { Clock, TimerHandle } from "../clock.ts";
 import type { CodecLike, CodecPrefs } from "../codecs.ts";
+import { FloorGuard } from "../floor-guard.ts";
 import { errInfo, type Logger, nullLogger, short } from "../log.ts";
 import { type LocalTracks, type PeerRole, PeerSession } from "../peer-session.ts";
 import { hasLevels, viewChanged, viewToReport } from "../policy.ts";
@@ -109,6 +110,11 @@ export class MeshTransport implements MediaTransport {
   /** Adaptive send level per pair (ADR-0008) and the session each decision belongs to. */
   private readonly levels = new SenderLevels();
   private readonly levelSessions = new Map<string, PeerSession>();
+  /** Floor guard per pair (ADR-0009), keyed by peer id; reset when the pc is replaced. */
+  private readonly guards = new Map<
+    string,
+    { session: PeerSession; guard: FloorGuard; bytes?: number; t?: number }
+  >();
 
   constructor(private readonly o: MeshOptions) {
     this.log = o.log ?? nullLogger;
@@ -316,11 +322,15 @@ export class MeshTransport implements MediaTransport {
       }),
     );
     const got = out.filter((x) => x !== null);
-    if (consumer === ADAPT_CONSUMER && !this.closed) this.adaptLevels(got);
+    if (consumer === ADAPT_CONSUMER && !this.closed) {
+      this.adaptLevels(got);
+      this.guardFloors(got);
+    }
     const levels = hasLevels(this.participantCount());
     for (const { session, stats } of got) {
       if (levels) stats.video.sendLevel = session.sendLevel;
       if (session.videoMaxBitrate !== undefined) stats.video.sendMaxBitrate = session.videoMaxBitrate;
+      if (session.guardCap !== undefined) stats.video.guardCap = session.guardCap;
     }
     return got.map((x) => x.stats);
   }
@@ -365,6 +375,44 @@ export class MeshTransport implements MediaTransport {
       });
       void session.setSendLevel(ch.level);
     }
+  }
+
+  /** One floor-guard tick per pair (ADR-0009, floor-guard.ts): app-layer back-off below the SDP floor. */
+  private guardFloors(got: { e: Entry; session: PeerSession; stats: QaPeerStats }[]) {
+    const t = this.o.clock.now();
+    for (const { e, session, stats } of got) {
+      if (e.session !== session) continue;
+      let g = this.guards.get(e.id);
+      if (!g || g.session !== session) {
+        g = { session, guard: new FloorGuard() };
+        this.guards.set(e.id, g);
+      }
+      const bytes = stats.video.bytesSent;
+      const sendBps =
+        bytes !== undefined && g.bytes !== undefined && g.t !== undefined && t > g.t && bytes >= g.bytes
+          ? ((bytes - g.bytes) * 8 * 1000) / (t - g.t)
+          : undefined;
+      g.bytes = bytes;
+      g.t = t;
+      const before = g.guard.cap;
+      const cap = g.guard.update({
+        t,
+        floorBps: stats.connectionState === "connected" ? session.floorBps : null,
+        estimateBps: stats.availableOutgoingBitrate,
+        rttMs: stats.rttMs,
+        lossFraction: stats.video.remoteFractionLost,
+        videoSendBps: sendBps,
+      });
+      if (cap !== before)
+        this.log.info("floor guard", {
+          peer: short(e.id),
+          capKbps: cap === undefined ? null : Math.round(cap / 1000),
+          rttMs: stats.rttMs ?? null,
+          loss: stats.video.remoteFractionLost ?? null,
+        });
+      void session.setGuardCap(cap);
+    }
+    for (const id of [...this.guards.keys()]) if (!this.roster.has(id)) this.guards.delete(id);
   }
 
   onChange(cb: () => void): () => void {

@@ -86,6 +86,8 @@ export class Peer {
   readonly pageErrors: string[] = [];
   readonly failedRequests: string[] = [];
   joinClickedAt: number | null = null;
+  /** Epoch ms at which every remote had decoded a frame (see watchFirstFrames); null = not yet / timed out. */
+  private firstFramesWatch: Promise<number | null> | null = null;
   /** App URL flags for every navigation (see LaunchOptions.flags). */
   flags = "";
   /** false = shared browser (LaunchOptions.browser): close() only closes this peer's context. */
@@ -220,6 +222,29 @@ export class Peer {
       `${this.label}: first remote frames`,
     );
     return Date.now() - (this.joinClickedAt ?? Date.now());
+  }
+
+  /**
+   * Start polling (100 ms) right now — call it right after the Join click — for the moment every one of `n - 1`
+   * remotes has decoded a frame. Resolves with that epoch ms, or null after `timeout`. Unlike waitFirstFrames it
+   * does not wait for the lab's serial joins, so it timestamps the first frame within ~100 ms.
+   */
+  watchFirstFrames(n: number, timeout = 60_000): void {
+    this.firstFramesWatch = (async () => {
+      const end = Date.now() + timeout;
+      while (Date.now() < end) {
+        const ok = await this.stats()
+          .then((s) => s.length === n - 1 && s.every((p) => (p.video.framesDecoded ?? 0) > 0))
+          .catch(() => false);
+        if (ok) return Date.now();
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return null;
+    })();
+  }
+
+  firstFramesAt(): Promise<number | null> {
+    return this.firstFramesWatch ?? Promise.resolve(null);
   }
 
   // ── recording ──

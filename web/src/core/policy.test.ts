@@ -8,6 +8,8 @@ import {
   rungFor,
   TIER4_HIGH_BITRATE,
   tierFor,
+  videoCeilingKbps,
+  videoFloorKbps,
   videoPolicy,
   videoStartBitrateKbps,
   viewChanged,
@@ -231,5 +233,23 @@ describe("3–4 tier send levels (ADR-0008)", () => {
 
   it("start bitrate stays at the base cap", () => {
     expect(videoStartBitrateKbps(3)).toBe(600);
+  });
+});
+
+describe("videoFloorKbps (ADR-0009)", () => {
+  it("floors only 2-party calls; ?vmin= overrides, 0 disables", () => {
+    expect(videoFloorKbps(1)).toBe(200);
+    expect(videoFloorKbps(2)).toBe(200);
+    expect(videoFloorKbps(3)).toBeNull();
+    expect(videoFloorKbps(10)).toBeNull();
+    expect(videoFloorKbps(3, 150)).toBe(150);
+    expect(videoFloorKbps(2, 0)).toBeNull();
+  });
+  it("ceiling = highest tier cap × 1.2 + voice audio; ?vmax= overrides, 0 disables", () => {
+    expect(videoCeilingKbps(2)).toBe(1832);
+    expect(videoCeilingKbps(3)).toBe(992); // 3–4 high level 800 kbps, above the 915 kbps upgrade bar
+    expect(videoCeilingKbps(6)).toBe(212);
+    expect(videoCeilingKbps(2, 1600)).toBe(1600);
+    expect(videoCeilingKbps(2, 0)).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { synthTimeline } from "./fixtures.ts";
-import { buildMetrics, errMsg } from "./lab.ts";
+import { buildMetrics, errMsg, joinTtffFrom, parseLinkOverride, statsGapMaxS } from "./lab.ts";
 import { summarizeTimeline } from "./metrics.ts";
 import { loadProfile } from "./profiles.ts";
 import type { DirectionResult } from "./report.ts";
@@ -104,5 +104,40 @@ describe("errMsg", () => {
       "locator.click: Timeout 30000ms exceeded. — - waiting for locator('[data-testid=\"start-call\"]')",
     );
     expect(errMsg("x")).toBe("x");
+  });
+});
+
+describe("diagnostic link override", () => {
+  it("parses key=value pairs into a LinkState patch", () => {
+    expect(parseLinkOverride("jitter_ms=0, loss_pct=2.5,loss_model=random")).toEqual({
+      jitter_ms: 0,
+      loss_pct: 2.5,
+      loss_model: "random",
+    });
+    expect(parseLinkOverride("")).toEqual({});
+  });
+  it("rejects unknown keys and bad values", () => {
+    expect(() => parseLinkOverride("rtt=5")).toThrow(/unknown key/);
+    expect(() => parseLinkOverride("delay_ms=-1")).toThrow(/number/);
+    expect(() => parseLinkOverride("loss_model=bursty")).toThrow(/random\|gilbert/);
+  });
+});
+
+describe("joinTtffFrom", () => {
+  it("measures from the latest Join click among the participants", () => {
+    // host clicks at 1000, guest at 9000 (slow page load); host sees video at 9800, guest at 9500.
+    expect(joinTtffFrom([1000, 9000], [9800, 9500])).toEqual([800, 500]);
+  });
+  it("null when a click or a first frame is missing", () => {
+    expect(joinTtffFrom([1000, null], [2000, 3000])).toEqual([null, null]);
+    expect(joinTtffFrom([1000, 2000], [null, 3000])).toEqual([null, 1000]);
+  });
+});
+
+describe("statsGapMaxS (lab health)", () => {
+  it("largest sampler gap after t0 across participants", () => {
+    const tl = (ts: number[]) => ts.map((t) => ({ t, local: {}, peers: [] }));
+    expect(statsGapMaxS({ p0: tl([0, 1000, 2000, 6500]), p1: tl([0, 1000, 3000]) }, 500)).toBe(4.5);
+    expect(statsGapMaxS({ p0: tl([0, 9000]) }, 1000)).toBeNull();
   });
 });

@@ -33,6 +33,8 @@ import {
   levelEligible,
   mergeAudioEncoding,
   mergeVideoEncoding,
+  videoCeilingKbps,
+  videoFloorKbps,
   videoPolicy,
   videoStartBitrateKbps,
   withoutDegradation,
@@ -143,6 +145,8 @@ export class PeerSession {
   private _sendLevel: SendLevel = "base";
   /** Video maxBitrate last applied to our sender (bps). */
   private _videoMaxBitrate: number | undefined;
+  /** Floor-guard video cap (bps, floor-guard.ts); undefined = none. */
+  private _guardCap: number | undefined;
   /** This engine rejected setParameters with a degradationPreference once: don't send it again. */
   private degradationUnsupported = false;
   private paramsTail: Promise<void> = Promise.resolve();
@@ -272,6 +276,11 @@ export class PeerSession {
       const s = this.remoteStream!;
       if (!s.getTracks().includes(ev.track)) s.addTrack(ev.track);
       log.info("track", { peer: short(this.remoteId), kind: ev.track.kind });
+      const jbt = this.o.codecPrefs?.videoJitterTargetMs;
+      if (ev.track.kind === "video" && jbt !== undefined)
+        try {
+          (ev.receiver as RTCRtpReceiver & { jitterBufferTarget?: number | null }).jitterBufferTarget = jbt;
+        } catch {}
       this.o.events.stream?.(s);
     };
     pc.onconnectionstatechange = () => {
@@ -413,6 +422,8 @@ export class PeerSession {
     return withVideoStartBitrate(
       desc,
       videoStartBitrateKbps(this.participants, this.o.codecPrefs?.videoStartKbps),
+      videoFloorKbps(this.participants, this.o.codecPrefs?.videoMinKbps),
+      videoCeilingKbps(this.participants, this.o.codecPrefs?.videoMaxKbps),
     );
   }
 
@@ -829,6 +840,23 @@ export class PeerSession {
     return audioPolicy(this.o.local().mode, this.o.codecPrefs?.audio).maxBitrate;
   }
 
+  /** The congestion-controller floor our descriptions carry for this pair (bps), null = none (ADR-0009). */
+  get floorBps(): number | null {
+    const k = videoFloorKbps(this.participants, this.o.codecPrefs?.videoMinKbps);
+    return k === null ? null : k * 1000;
+  }
+
+  get guardCap(): number | undefined {
+    return this._guardCap;
+  }
+
+  /** Floor guard (ADR-0009): cap the video encoder below the floor on real congestion; undefined lifts it. */
+  setGuardCap(bps: number | undefined): Promise<void> {
+    if (bps === this._guardCap) return this.paramsTail;
+    this._guardCap = bps;
+    return this.applyEncodings();
+  }
+
   /** Adaptive send level (ADR-0008): only the video maxBitrate changes, never the scale. */
   setSendLevel(level: SendLevel): Promise<void> {
     if (level === this._sendLevel) return this.paramsTail;
@@ -848,6 +876,9 @@ export class PeerSession {
         level: this._sendLevel,
       });
       if (this.degradationUnsupported) delete v.degradationPreference;
+      if (this._guardCap !== undefined) v.maxBitrate = Math.min(v.maxBitrate, this._guardCap);
+      const svc = this.o.codecPrefs?.videoScalability;
+      if (svc) v.scalabilityMode = svc;
       const sender = this.videoTx?.sender;
       await this.setParams(sender, (p) => mergeVideoEncoding(p, v), "video", {
         ...v,

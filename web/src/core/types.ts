@@ -219,6 +219,12 @@ export interface QaPeerStats {
     concealedSamples?: number;
     totalSamplesReceived?: number;
     codec?: string;
+    /** outbound-rtp targetBitrate of our audio to this peer (bps). */
+    targetBitrate?: number;
+    /** outbound-rtp retransmittedBytesSent (audio has no RTX in practice; RED/FEC are inside bytesSent). */
+    retransmittedBytesSent?: number;
+    /** inbound-rtp fecPacketsReceived (Opus in-band FEC / RED recoveries counted by the receiver). */
+    fecPacketsReceived?: number;
   };
   video: {
     bytesReceived?: number;
@@ -244,6 +250,35 @@ export interface QaPeerStats {
     sendLevel?: "base" | "high";
     /** The video maxBitrate we applied to this peer's encoding (bps). */
     sendMaxBitrate?: number;
+    /** Floor-guard cap on our video to this peer (bps, ADR-0009); absent = none. */
+    guardCap?: number;
+    // Loss-recovery attribution (cumulative counters; lab/diag diff them). Sender side = our stream to this peer.
+    /** outbound-rtp retransmittedBytesSent (RTX payload, a subset of bytesSent). */
+    retransmittedBytesSent?: number;
+    /** outbound-rtp headerBytesSent (RTP headers incl. extensions, not in bytesSent). */
+    headerBytesSent?: number;
+    /** outbound-rtp packetsSent. */
+    packetsSent?: number;
+    /** outbound-rtp targetBitrate (encoder target, bps). */
+    targetBitrate?: number;
+    /** outbound-rtp framesPerSecond (what we encode for this peer). */
+    sentFramesPerSecond?: number;
+    /** outbound-rtp keyFramesEncoded. */
+    keyFramesEncoded?: number;
+    /** outbound-rtp nackCount / pliCount: NACKs and PLIs this peer sent us. */
+    nackReceived?: number;
+    pliReceived?: number;
+    // Receiver side = this peer's stream to us.
+    /** inbound-rtp packetsLost / packetsReceived (video). */
+    packetsLost?: number;
+    packetsReceived?: number;
+    /** inbound-rtp fecPacketsReceived / retransmittedBytesReceived: how much of the peer's stream was FEC / RTX. */
+    fecPacketsReceived?: number;
+    retransmittedBytesReceived?: number;
+    /** inbound-rtp keyFramesDecoded, pliCount, nackCount (PLIs / NACKs we sent). */
+    keyFramesDecoded?: number;
+    pliSent?: number;
+    nackSent?: number;
   };
   /** Derived kbps since the previous sample (both directions, audio+video). */
   inboundKbps?: number;

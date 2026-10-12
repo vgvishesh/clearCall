@@ -26,6 +26,12 @@ export interface PeerResult {
   /** Wall ms from clicking Join until every remote is connected / first remote frame decoded. */
   connected_ms: number | null;
   first_frame_ms: number | null;
+  /**
+   * Joiner-perceived time to first frame: from the LATEST Join click among this participant and the remotes it
+   * waits for, to the first decoded frame of every remote (polled from the moment of its own click, 100 ms
+   * resolution). Unlike first_frame_ms it excludes the other guests' page loads and serial joins.
+   */
+  join_ttff_ms?: number | null;
   cpu_pct: number | null;
   summary: TimelineSummary;
 }
@@ -112,9 +118,9 @@ export function renderMarkdown(r: LabReport): string {
   }
   L.push("", "## Participants", "");
   L.push(
-    "| peer | connect ms | 1st frame ms | send kbps mean/p95 | recv kbps mean/p95 | RTT ms | freeze % | conceal % | enc ms | CPU % | limit |",
+    "| peer | connect ms | 1st frame ms | join→frame ms | send kbps mean/p95 | recv kbps mean/p95 | RTT ms | freeze % | conceal % | enc ms | CPU % | limit |",
   );
-  L.push("|---|---|---|---|---|---|---|---|---|---|---|");
+  L.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const p of r.peers) {
     const s = p.summary;
     const ql = Object.entries(
@@ -123,8 +129,21 @@ export function renderMarkdown(r: LabReport): string {
       .map(([k, v]) => `${k}:${v}`)
       .join(" ");
     L.push(
-      `| ${p.label} | ${fmt(p.connected_ms)} | ${fmt(p.first_frame_ms)} | ${fmt(s.send_kbps_mean, 0)}/${fmt(s.send_kbps_p95, 0)} | ${fmt(s.recv_kbps_mean, 0)}/${fmt(s.recv_kbps_p95, 0)} | ${fmt(s.rtt_ms_mean, 0)} | ${fmt(s.freeze_ratio_max === null ? null : s.freeze_ratio_max * 100)} | ${fmt(s.concealment_ratio_max === null ? null : s.concealment_ratio_max * 100)} | ${fmt(s.encode_ms_mean)} | ${fmt(p.cpu_pct, 0)} | ${ql || "—"} |`,
+      `| ${p.label} | ${fmt(p.connected_ms)} | ${fmt(p.first_frame_ms)} | ${fmt(p.join_ttff_ms ?? null)} | ${fmt(s.send_kbps_mean, 0)}/${fmt(s.send_kbps_p95, 0)} | ${fmt(s.recv_kbps_mean, 0)}/${fmt(s.recv_kbps_p95, 0)} | ${fmt(s.rtt_ms_mean, 0)} | ${fmt(s.freeze_ratio_max === null ? null : s.freeze_ratio_max * 100)} | ${fmt(s.concealment_ratio_max === null ? null : s.concealment_ratio_max * 100)} | ${fmt(s.encode_ms_mean)} | ${fmt(p.cpu_pct, 0)} | ${ql || "—"} |`,
     );
+  }
+  const attr = r.peers.flatMap((p) => p.summary.remotes.map((x) => ({ p: p.label, x })));
+  if (attr.some(({ x }) => x.video_send_kbps !== undefined && x.video_send_kbps !== null)) {
+    L.push("", "## Send attribution (per sender → remote, kbps over the window)", "");
+    L.push(
+      "| sender → remote | video | of which RTX | RTP hdr | audio | enc target | sent fps | keyframes | PLI rx | NACK rx | rx loss % | rx FEC % | rx RTX % |",
+    );
+    L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    const pc = (v: number | null | undefined) => (v === null || v === undefined ? "—" : fmt(v * 100));
+    for (const { p, x } of attr)
+      L.push(
+        `| ${p} → ${x.id.slice(0, 6)} | ${fmt(x.video_send_kbps, 0)} | ${fmt(x.rtx_send_kbps, 1)} | ${fmt(x.video_header_kbps, 0)} | ${fmt(x.audio_send_kbps, 1)} | ${fmt(x.video_target_kbps_mean, 0)} | ${fmt(x.sent_fps_mean, 1)} | ${fmt(x.keyframes_encoded)} | ${fmt(x.pli_received)} | ${fmt(x.nack_received)} | ${pc(x.video_loss_ratio)} | ${pc(x.fec_recv_ratio)} | ${pc(x.rtx_recv_ratio)} |`,
+      );
   }
   if (Object.keys(r.errors).length) {
     L.push("", "## Errors", "");

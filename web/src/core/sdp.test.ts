@@ -153,5 +153,8 @@ describe("video start bitrate munging", () => {
     const rb = { type: "rollback" as RTCSdpType };
     expect(withVideoStartBitrate(rb, 1500)).toBe(rb);
     expect(withVideoStartBitrate(offer, 1500).sdp).toContain("x-google-start-bitrate=1500");
+    const both = withVideoStartBitrate(offer, 1500, 150).sdp!;
+    expect(both).toContain("x-google-start-bitrate=1500;x-google-min-bitrate=150");
+    expect(withVideoStartBitrate(offer, null, 150).sdp).toContain("x-google-min-bitrate=150");
   });
 });

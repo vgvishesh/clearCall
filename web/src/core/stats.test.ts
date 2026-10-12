@@ -96,6 +96,48 @@ describe("summarizePeerStats", () => {
     expect(quality).toBe("good");
   });
 
+  it("exposes loss-recovery counters (RTX, FEC, NACK/PLI, keyframes, encoder target)", () => {
+    const r = chromeReport();
+    Object.assign(r.get("OV")!, {
+      retransmittedBytesSent: 9000,
+      headerBytesSent: 4000,
+      packetsSent: 160,
+      targetBitrate: 1_400_000,
+      framesPerSecond: 29,
+      keyFramesEncoded: 2,
+      nackCount: 7,
+      pliCount: 1,
+    });
+    Object.assign(r.get("IV")!, {
+      fecPacketsReceived: 12,
+      retransmittedBytesReceived: 3000,
+      keyFramesDecoded: 3,
+      pliCount: 2,
+      nackCount: 5,
+    });
+    Object.assign(r.get("OA")!, { targetBitrate: 32_000 });
+    Object.assign(r.get("IA")!, { fecPacketsReceived: 4 });
+    const { stats } = summarizePeerStats(r, { id: "p", name: "Ann", connectionState: "connected" }, 1000);
+    expect(stats.video).toMatchObject({
+      retransmittedBytesSent: 9000,
+      headerBytesSent: 4000,
+      packetsSent: 160,
+      targetBitrate: 1_400_000,
+      sentFramesPerSecond: 29,
+      keyFramesEncoded: 2,
+      nackReceived: 7,
+      pliReceived: 1,
+      packetsLost: 4,
+      packetsReceived: 200,
+      fecPacketsReceived: 12,
+      retransmittedBytesReceived: 3000,
+      keyFramesDecoded: 3,
+      pliSent: 2,
+      nackSent: 5,
+    });
+    expect(stats.audio).toMatchObject({ targetBitrate: 32_000, fecPacketsReceived: 4 });
+  });
+
   it("computes kbps, interval loss and interval encode cost from the previous sample", () => {
     const first = summarizePeerStats(
       chromeReport(1),

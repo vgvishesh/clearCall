@@ -14,6 +14,7 @@
  * Exit 1 on any breach or session error. Without --netem the run is labelled UNSHAPED.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { loadavg } from "node:os";
 import { join } from "node:path";
 import type { Browser } from "@playwright/test";
 import { dnsmos, scoreMusic, scoreSpeech } from "./audio.ts";
@@ -47,7 +48,7 @@ import {
 } from "./netem.ts";
 import { browserCpu, cpuPct, cpuPctBetween, launchSharedBrowser, Peer, parseViewport } from "./peers.ts";
 import { corpusFile, type MediaManifest, prepareMedia } from "./prepare-media.ts";
-import { changePoints, linkAt, listProfiles, loadProfile, type Profile } from "./profiles.ts";
+import { changePoints, type LinkState, linkAt, listProfiles, loadProfile, type Profile } from "./profiles.ts";
 import {
   type DirectionResult,
   isScored,
@@ -83,6 +84,32 @@ export interface LabOptions {
   latency?: boolean;
   /** Emulate this % of Gilbert audio loss in the receivers when netem is unavailable (src/loss-emu.ts). */
   emulateLoss?: number;
+  /**
+   * Diagnostic link override (`--link jitter_ms=0,loss_pct=0,loss_model=random`): applied to the profile's base
+   * link (not its schedule) and recorded in the report notes. For root-cause experiments only — gate runs never
+   * use it.
+   */
+  linkOverride?: string;
+}
+
+/** `jitter_ms=0,loss_model=random` → a LinkState patch. Throws on unknown keys or bad values. */
+export function parseLinkOverride(spec: string): Partial<LinkState> {
+  const out: Partial<LinkState> = {};
+  for (const part of spec
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)) {
+    const [k, v] = part.split("=", 2) as [string, string | undefined];
+    if (k === "loss_model") {
+      if (v !== "random" && v !== "gilbert") throw new Error(`--link loss_model must be random|gilbert`);
+      out.loss_model = v;
+    } else if (["up_kbps", "down_kbps", "delay_ms", "jitter_ms", "loss_pct"].includes(k)) {
+      const n = Number(v);
+      if (v === undefined || !Number.isFinite(n) || n < 0) throw new Error(`--link ${k} needs a number ≥ 0`);
+      (out as Record<string, number>)[k] = n;
+    } else throw new Error(`--link: unknown key ${k}`);
+  }
+  return out;
 }
 
 export interface SessionResult {
@@ -96,6 +123,8 @@ export interface SessionResult {
   t0: number;
   /** Whole-tree CPU of all local browsers during the measure window (% of one core). */
   proc_cpu_pct?: number | null;
+  /** Host 1-minute load average at session start / end (lab health). */
+  host_load?: { start: number; end: number };
   /** Audio capture→playout latency per direction ("p1_to_p0"), when --latency. */
   latency?: Record<string, LatencyResult | null>;
 }
@@ -120,6 +149,37 @@ async function scored<T>(f: () => Promise<T>): Promise<Scored<T>> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Per participant: first frame of every remote minus the latest Join click among it and its remotes (the moment the
+ * call could start for it). Excludes the lab's serial page loads of other guests that `first_frame_ms` includes.
+ */
+/** Largest gap (s) between consecutive stats samples of any participant after `t0`; null without samples. */
+export function statsGapMaxS(timelines: Record<string, QaStatsSample[]>, t0: number): number | null {
+  let max: number | null = null;
+  for (const tl of Object.values(timelines)) {
+    const ts = tl
+      .map((x) => x.t)
+      .filter((t) => t >= t0)
+      .sort((a, b) => a - b);
+    for (let i = 1; i < ts.length; i++) max = Math.max(max ?? 0, (ts[i]! - ts[i - 1]!) / 1000);
+  }
+  return max;
+}
+
+export function joinTtffFrom(clicks: (number | null)[], firstAt: (number | null)[]): (number | null)[] {
+  if (clicks.some((c) => c === null)) return firstAt.map(() => null);
+  const latest = Math.max(...(clicks as number[]));
+  return firstAt.map((f) => (f === null ? null : Math.max(0, f - latest)));
+}
+
+async function joinerTtff(peers: Peer[]): Promise<(number | null)[]> {
+  const firstAt = await Promise.all(peers.map((p) => p.firstFramesAt()));
+  return joinTtffFrom(
+    peers.map((p) => p.joinClickedAt),
+    firstAt,
+  );
+}
+
 /** One call session: launch, join, (shape), record, collect. Never throws — failures land in `errors`. */
 export async function runSession(
   profile: Profile,
@@ -129,6 +189,7 @@ export async function runSession(
   outDir: string,
 ): Promise<SessionResult> {
   const started = new Date();
+  const load0 = loadavg()[0]!;
   const errors: Record<string, string> = {};
   const notes: string[] = [];
   const n = profile.participants;
@@ -145,6 +206,7 @@ export async function runSession(
   const timelines: Record<string, QaStatsSample[]> = {};
   const latency: Record<string, LatencyResult | null> = {};
   let t0 = Date.now();
+  let tEnd = Number.POSITIVE_INFINITY;
   let procCpuPct: number | null = null;
   try {
     // ── launch ──
@@ -196,7 +258,11 @@ export async function runSession(
     // ── join ──
     const [host, ...guests] = peers;
     const link = await host!.startCall(appUrl);
-    for (const g of guests) await g.joinCall(link, appUrl);
+    host!.watchFirstFrames(n);
+    for (const g of guests) {
+      await g.joinCall(link, appUrl);
+      g.watchFirstFrames(n);
+    }
     const connected = await Promise.all(
       peers.map((p) =>
         p.waitConnected(n, 30_000 + 3_000 * n).catch((e) => {
@@ -206,6 +272,7 @@ export async function runSession(
       ),
     );
     const firstFrames = await Promise.all(peers.map((p) => p.waitFirstFrames(30_000).catch(() => null)));
+    const joinTtff = await joinerTtff(peers);
     if (mode === "music")
       for (const p of peers)
         await p.setMusicMode().catch((e) => {
@@ -257,6 +324,7 @@ export async function runSession(
       await sleep(Math.min(5000, end - Date.now()));
       for (const p of peers) if (p.page.isClosed()) throw new Error(`${p.label} page closed/crashed`);
     }
+    tEnd = Date.now();
     const cpu1 = await Promise.all(peers.map((p) => p.cpuMetrics()));
     procCpuPct = cpuPctBetween(proc0, await browserCpu());
 
@@ -310,8 +378,11 @@ export async function runSession(
         label: p.label,
         connected_ms: connected[i] ?? null,
         first_frame_ms: firstFrames[i] ?? null,
+        join_ttff_ms: joinTtff[i] ?? null,
         cpu_pct: cpuPct(cpu0[i] ?? null, cpu1[i] ?? null),
-        summary: summarizeTimeline(tl.filter((s) => s.t >= t0)),
+        // Measurement window only: after it the lab stops recordings and pulls multi-MB blobs out of the pages
+        // (base64 over CDP), which starves the page and showed up as freezes in the last ~10 s of the timeline.
+        summary: summarizeTimeline(tl.filter((s) => s.t >= t0 && s.t <= tEnd + 1000)),
       });
       if (!tl.length) notes.push(`${p.label}: empty stats timeline`);
     }
@@ -331,6 +402,7 @@ export async function runSession(
   return {
     started,
     finished: new Date(),
+    host_load: { start: load0, end: loadavg()[0]! },
     peers: results,
     directions,
     timelines,
@@ -370,7 +442,8 @@ export async function scoreDirections(
 /** Aggregate session results into gate metrics (worst direction / worst participant). Pure. */
 export function buildMetrics(
   profile: Profile,
-  s: Pick<SessionResult, "peers" | "directions" | "t0" | "timelines" | "proc_cpu_pct">,
+  s: Pick<SessionResult, "peers" | "directions" | "t0" | "timelines" | "proc_cpu_pct"> &
+    Partial<Pick<SessionResult, "host_load">>,
 ): { metrics: Record<string, MetricValue>; errors: Record<string, string> } {
   const m: Record<string, MetricValue> = {};
   const errors: Record<string, string> = {};
@@ -466,6 +539,25 @@ export function buildMetrics(
     m.freeze_ratio = maxOrNull(P.map((p) => p.summary.freeze_ratio_max));
     m.audio_concealment_ratio = maxOrNull(P.map((p) => p.summary.concealment_ratio_max));
     m.time_to_first_frame_ms = maxOrNull(P.map((p) => p.first_frame_ms));
+    const jt = maxOrNull(P.map((p) => p.join_ttff_ms));
+    if (jt !== null) m.join_ttff_ms = jt;
+    // Loss-recovery / overhead attribution (sender side, worst participant): RTX share of what we send.
+    const sumOver = (p: PeerResult, f: (r: PeerResult["summary"]["remotes"][number]) => number | null) => {
+      const v = p.summary.remotes.map(f).filter((x): x is number => typeof x === "number");
+      return v.length ? v.reduce((a, b) => a + b, 0) : null;
+    };
+    const vs = maxOrNull(P.map((p) => sumOver(p, (r) => r.video_send_kbps)));
+    if (vs !== null) m.video_send_kbps = vs;
+    const rtx = maxOrNull(P.map((p) => sumOver(p, (r) => r.rtx_send_kbps)));
+    if (rtx !== null) m.rtx_send_kbps = rtx;
+    const tgt = maxOrNull(P.map((p) => sumOver(p, (r) => r.video_target_kbps_mean)));
+    if (tgt !== null) m.video_target_kbps = tgt;
+    const fec = maxOrNull(P.flatMap((p) => p.summary.remotes.map((r) => r.fec_recv_ratio)));
+    if (fec !== null) m.fec_recv_ratio = fec;
+    const vl = maxOrNull(P.flatMap((p) => p.summary.remotes.map((r) => r.video_loss_ratio)));
+    if (vl !== null) m.video_loss_ratio = vl;
+    const kf = maxOrNull(P.flatMap((p) => p.summary.remotes.map((r) => r.keyframes_encoded)));
+    if (kf !== null) m.keyframes_encoded_max = kf;
     m.cpu_pct = maxOrNull(P.map((p) => p.cpu_pct));
     m.rtt_ms = mean(P.map((p) => p.summary.rtt_ms_mean).filter((x): x is number => x !== null));
     m.encode_ms = maxOrNull(P.map((p) => p.summary.encode_ms_mean));
@@ -480,6 +572,14 @@ export function buildMetrics(
     }
   }
   m.setup_success_rate = P.filter((p) => p.connected_ms !== null).length / profile.participants;
+  // Lab health: the 1 Hz in-page sampler stalls when the host is overloaded (the page's main thread starves), which
+  // also starves encoders/decoders → fake freezes and estimate collapses. Large gaps = distrust the run.
+  const gap = statsGapMaxS(s.timelines, s.t0);
+  if (gap !== null) m.stats_gap_max_s = gap;
+  if (s.host_load) {
+    m.host_load_start = Math.round(s.host_load.start * 10) / 10;
+    m.host_load_end = Math.round(s.host_load.end * 10) / 10;
+  }
   const lv = sendLevelSummary(s.timelines, s.t0);
   if (lv.high_ratio !== null) {
     m.send_level_high_ratio = lv.high_ratio;
@@ -509,7 +609,13 @@ async function gitInfo(): Promise<{ commit: string; dirty: boolean }> {
 export async function runProfile(name: string, opts: LabOptions): Promise<LabReport> {
   const loaded = loadProfile(name);
   const n = opts.participantsOverride ?? loaded.participants;
-  const profile: Profile = { ...loaded, participants: n, topology: n > 2 ? "mesh" : loaded.topology };
+  const linkPatch = opts.linkOverride ? parseLinkOverride(opts.linkOverride) : {};
+  const profile: Profile = {
+    ...loaded,
+    link: { ...loaded.link, ...linkPatch },
+    participants: n,
+    topology: n > 2 ? "mesh" : loaded.topology,
+  };
   const thresholds = loadThresholds();
   const media = await prepareMedia();
   const ts = timestamp();
@@ -524,6 +630,8 @@ export async function runProfile(name: string, opts: LabOptions): Promise<LabRep
   const s = await runSession(profile, profile.mode, media, opts, outDir);
   const notes = [...s.notes];
   if (opts.flags) notes.push(`app URL flags: ${opts.flags}`);
+  if (opts.linkOverride)
+    notes.push(`DIAGNOSTIC link override (not the profile): ${JSON.stringify(linkPatch)} — not a gate run`);
   const errors = { ...s.errors };
   await scoreDirections(s.directions, profile, media, workDir);
   const { metrics, errors: scoreErrors } = buildMetrics(profile, s);
@@ -665,6 +773,7 @@ async function main() {
     ...(a.get("participants") ? { participantsOverride: Number(a.get("participants")) } : {}),
     ...(a.has("shared-browser") ? { sharedBrowser: true } : {}),
     ...(a.get("viewport") ? { viewport: a.get("viewport")! } : {}),
+    ...(a.get("link") ? { linkOverride: a.get("link")! } : {}),
   };
   if (!opts.netem) log("UNSHAPED run (no --netem): network profile values are not enforced");
   const names = which === "all" ? listProfiles() : [which];

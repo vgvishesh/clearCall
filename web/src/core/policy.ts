@@ -76,6 +76,8 @@ export interface VideoEncodeCaps {
    * leaves it at 270p — lab, ADR-0008). Absent = browser default ("balanced"; restored when leaving high).
    */
   degradationPreference?: "maintain-resolution";
+  /** Temporal layering (e.g. "L1T3"); absent = leave the encoding's scalabilityMode untouched. */
+  scalabilityMode?: string;
 }
 
 /** Whether the high level would change this encode: 3–4 tier and the receiver wants the full 360p target. */
@@ -113,6 +115,32 @@ export function videoPolicy(input: VideoPolicyInput): VideoEncodeCaps {
 export function videoStartBitrateKbps(participants: number, override?: number): number | null {
   if (override !== undefined) return override > 0 ? override : null;
   return Math.round(tierFor(Math.max(1, participants)).maxBitrate / 1000);
+}
+
+/**
+ * Floor under the congestion controller's estimate (`x-google-min-bitrate`, kbps; ADR-0009), or null for none.
+ * 2-party only: on 3g_lossy Chrome's estimate decays to ~85 kbps (random loss + in-order jitter read as congestion)
+ * and a 200 kbps floor lifts VMAF 39–42 → 57 at 152 kbps send. Real congestion below the floor is handled by
+ * floor-guard.ts. 3–4: two or three floored pairs share one uplink; a 150 kbps floor per pair on 3g_lossy raised
+ * loss 5 → 10 % and freezes (lab), so no floor. 5–10: their 150 kbps cap is already at that level.
+ * `override` = the `?vmin=` lab flag (0 = no floor).
+ */
+export function videoFloorKbps(participants: number, override?: number): number | null {
+  if (override !== undefined) return override > 0 ? override : null;
+  return participants <= 2 ? VIDEO_FLOOR_2P_KBPS : null;
+}
+export const VIDEO_FLOOR_2P_KBPS = 200;
+
+/**
+ * Ceiling on the congestion controller's estimate (`x-google-max-bitrate`, kbps; ADR-0009): the highest video cap
+ * the tier can use (3–4: the 800 kbps high level) × 1.2 + audio. Without it GCC probes (RTX padding) far above what
+ * the encoder may send — 4g_typical: single seconds of 2.4–2.8 Mbps on a 1.5 Mbps cap, which queue on a jittery
+ * 3 Mbps uplink, cost freezes, and push mean send to 1.6–1.8 Mbps. `override` = `?vmax=` (0 = none).
+ */
+export function videoCeilingKbps(participants: number, override?: number): number | null {
+  if (override !== undefined) return override > 0 ? override : null;
+  const top = hasLevels(participants) ? TIER4_HIGH_BITRATE : tierFor(Math.max(1, participants)).maxBitrate;
+  return Math.round((top * 1.2 + AUDIO_BITRATE.voice) / 1000);
 }
 
 export const AUDIO_BITRATE: Record<AudioMode, number> = { voice: 32_000, music: 96_000 };
@@ -161,6 +189,7 @@ export function mergeVideoEncoding(
     maxBitrate: caps.maxBitrate,
     maxFramerate: caps.maxFramerate,
     scaleResolutionDownBy: caps.scaleResolutionDownBy,
+    ...(caps.scalabilityMode ? { scalabilityMode: caps.scalabilityMode } : {}),
   };
   const current = (params as WithDegradation).degradationPreference;
   const wantDp = caps.degradationPreference ?? (current && current !== "balanced" ? "balanced" : undefined);
@@ -171,7 +200,8 @@ export function mergeVideoEncoding(
     e0.active === next.active &&
     e0.maxBitrate === next.maxBitrate &&
     e0.maxFramerate === next.maxFramerate &&
-    e0.scaleResolutionDownBy === next.scaleResolutionDownBy;
+    e0.scaleResolutionDownBy === next.scaleResolutionDownBy &&
+    (!caps.scalabilityMode || (e0 as { scalabilityMode?: string }).scalabilityMode === caps.scalabilityMode);
   if (same) return null;
   const out: WithDegradation = { ...params, encodings: [{ ...e0, ...next }, ...encodings.slice(1)] };
   if (dpChange) out.degradationPreference = wantDp;

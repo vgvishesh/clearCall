@@ -201,6 +201,8 @@ describe("forcedVideoOrder (?vcodec=)", () => {
     expect(videoLabFlags("?vlevel=high")).toEqual({ vlevel: "high" });
     expect(videoLabFlags("?vlevel=base")).toEqual({ vlevel: "base" });
     expect(videoLabFlags("?vlevel=max")).toEqual({});
+    expect(videoLabFlags("?vmin=150&jbt=400")).toEqual({ vmin: 150, jbt: 400 });
+    expect(videoLabFlags("?vmin=0&jbt=-1&vmax=1700&svc=L1T3")).toEqual({ vmin: 0, vmax: 1700, svc: "L1T3" });
   });
   it("is null when absent or unknown (data-driven order stays)", () => {
     expect(forcedVideoOrder(undefined)).toBeNull();

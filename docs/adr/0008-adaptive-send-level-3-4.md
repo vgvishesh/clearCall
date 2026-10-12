@@ -122,3 +122,18 @@ no flapping on a noisy estimate or a single bad sample; exponential backoff 20 �
 ineligible; sender coordination (stagger, shared CPU, per-pair poor receiver, reset).
 `policy.test.ts`: levels and degradation-preference merge/restore/fallback. `mesh.test.ts`: sampler-driven upgrade
 and squeeze, QA polls don't drive it, an engine that rejects the preference still gets 800 kbps, 2-party has no level.
+
+## Netem follow-up (2026-10-12, ADR-0009, branch feat/lossy-link-resilience)
+`bw_squeeze` at 3 participants (link 2000 → 250 → 2000 kbps): the level drops to base 2–8 s after the squeeze
+(`estimate-drop`), as designed. It does not return to high before the run ends, and **the backoff is not why**:
+- The downgrade at t ≈ 38 s allows the next upgrade from t ≈ 58 s (20 s backoff).
+- The squeeze lifts at t = 60 s.
+- After that, Chrome's estimate climbs back from its collapse (~85 kbps) at about 8 %/s and reaches only
+  740–940 kbps by the end of the run, at t ≈ 93 s (baseline 100151, p0 pairs).
+- The upgrade needs 10 s at ≥ 915 kbps, or 15 s at ≥ 727 kbps on the probe path, so the estimate's recovery speed is
+  the binding constraint.
+
+Backoff numbers are unchanged. Faster recovery would need GCC to probe sooner, which the browser API doesn't expose.
+The 2-party floor in ADR-0009 shortens the climb by starting it at 200 kbps. At 3–4 a floor per pair congests the
+shared uplink (ADR-0009), so it is not used.
+

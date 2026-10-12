@@ -157,6 +157,14 @@ export function videoOrderFor(first: readonly string[] | null, participants: num
 export interface CodecPrefs {
   /** Lab override of the video start bitrate (`?vstart=<kbps>`, 0 = libwebrtc default); absent = policy. */
   videoStartKbps?: number | undefined;
+  /** Lab experiment: congestion-controller floor (`?vmin=<kbps>` → x-google-min-bitrate); absent = none. */
+  videoMinKbps?: number | undefined;
+  /** Lab A/B: congestion-controller ceiling (`?vmax=<kbps>`, 0 = none); absent = policy. */
+  videoMaxKbps?: number | undefined;
+  /** Lab experiment: video receiver jitterBufferTarget (`?jbt=<ms>`); absent = browser adaptive. */
+  videoJitterTargetMs?: number | undefined;
+  /** Lab experiment: video scalabilityMode (`?svc=`); absent = browser default (L1T1). */
+  videoScalability?: string | undefined;
   red: boolean;
   /** Mimes before the tier order: `?vcodec=` forced codec, else power-efficient ones; null = tier order only. */
   videoOrder: string[] | null;

@@ -29,6 +29,9 @@ NS + AGC off, EC on (UI suggests headphones). 64 kbps is the economy option.
   budget on phones — future ADR (W6).
 
 ## Consequences
+Netem follow-up (ADR-0009, 2026-10-12): on shaped `3g_lossy` (5 % Gilbert loss, ±40 ms jitter, ~400 ms RTT) audio
+concealment is 1.6–3.4 % with in-band FEC and no RED (gate 6 %), PESQ unchanged by the video changes. RED stays off;
+an audio step-down to 16–20 kbps was not adopted (8–12 kbps of a ~150 kbps budget).
 Revisit when (a) netem works on this host (FEC/RED under jitter; adaptive RED for ≤4 people at ≥3 % loss),
 (b) ML NS is evaluated, (c) real owner media replaces the synthetic corpus. Lab caveat: identical audio files on both
 peers make Chrome's echo canceller suppress music; music comparisons use `?ec=0` or per-peer corpora.

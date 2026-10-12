@@ -160,11 +160,23 @@ class Controller implements CallController {
     deps.window?.addEventListener("online", this.onOnline);
     deps.document?.addEventListener("visibilitychange", this.onVisibility);
     this.L.info("controller created", { qa: deps.flags.qa, red: deps.flags.red, audio: deps.flags.audio });
-    if (deps.flags.vcodec || deps.flags.vstart !== undefined || deps.flags.vlevel)
+    if (
+      deps.flags.vcodec ||
+      deps.flags.vstart !== undefined ||
+      deps.flags.vlevel ||
+      deps.flags.vmin !== undefined ||
+      deps.flags.vmax !== undefined ||
+      deps.flags.jbt !== undefined ||
+      deps.flags.svc
+    )
       this.L.info("video lab overrides", {
         vcodec: deps.flags.vcodec,
         vstart: deps.flags.vstart,
         vlevel: deps.flags.vlevel,
+        vmin: deps.flags.vmin,
+        vmax: deps.flags.vmax,
+        jbt: deps.flags.jbt,
+        svc: deps.flags.svc,
       });
   }
 
@@ -377,7 +389,16 @@ class Controller implements CallController {
         sourceShortSide: media?.sourceShortSide,
       }),
       announce: () => this.announce(),
-      codecPrefs: { red: d.flags.red, videoOrder, videoStartKbps: d.flags.vstart, audio: d.flags.audio },
+      codecPrefs: {
+        red: d.flags.red,
+        videoOrder,
+        videoStartKbps: d.flags.vstart,
+        videoMinKbps: d.flags.vmin,
+        videoMaxKbps: d.flags.vmax,
+        videoJitterTargetMs: d.flags.jbt,
+        videoScalability: d.flags.svc,
+        audio: d.flags.audio,
+      },
       getCapabilities: d.getCapabilities,
       ...(d.flags.vlevel ? { levelOverride: d.flags.vlevel } : {}),
       ...(d.flags.relayOnly ? { relayOnly: true } : {}),
