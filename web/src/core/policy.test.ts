@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   audioPolicy,
+  cpuCappedView,
   hasLevels,
   levelEligible,
   mergeAudioEncoding,
@@ -251,5 +252,33 @@ describe("videoFloorKbps (ADR-0009)", () => {
     expect(videoCeilingKbps(6)).toBe(212);
     expect(videoCeilingKbps(2, 1600)).toBe(1600);
     expect(videoCeilingKbps(2, 0)).toBeNull();
+  });
+});
+
+describe("CPU guard levels (ADR-0010)", () => {
+  it("reduced = ≤ 360p at 15 fps and the 360p bitrate; paused = inactive", () => {
+    const r = videoPolicy({ participants: 2, viewHeight: 1080, sourceShortSide: 720, cpuLevel: 1 });
+    expect(r).toMatchObject({
+      active: true,
+      targetHeight: 360,
+      maxFramerate: 15,
+      maxBitrate: 600_000,
+      scaleResolutionDownBy: 2,
+    });
+    expect(videoPolicy({ participants: 2, viewHeight: 1080, cpuLevel: 2 }).active).toBe(false);
+    expect(videoPolicy({ participants: 2, viewHeight: 1080, cpuLevel: 0 }).targetHeight).toBe(720);
+    // 5–10 tier already below the reduced caps: unchanged except nothing.
+    expect(videoPolicy({ participants: 6, viewHeight: 180, cpuLevel: 1 })).toMatchObject({
+      targetHeight: 180,
+      maxFramerate: 15,
+    });
+  });
+
+  it("caps the view we report", () => {
+    expect(cpuCappedView(1080, 0)).toBe(1080);
+    expect(cpuCappedView(1080, 1)).toBe(360);
+    expect(cpuCappedView(240, 1)).toBe(240);
+    expect(cpuCappedView(1080, 2)).toBe(0);
+    expect(cpuCappedView(0, 1)).toBe(0);
   });
 });

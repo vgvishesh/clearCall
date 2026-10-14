@@ -85,6 +85,7 @@ export const SCENARIOS: ScreenScenario[] = [
   }),
   { name: "call-music-sheet", required: [TID.callScreen, TID.musicModeToggle, TID.sheetClose], tiles: 2 },
   { name: "call-reconnecting", required: [...CALL, TID.reconnectingBanner], tiles: 3 },
+  { name: "call-video-paused", required: [...CALL, TID.videoPausedNotice], tiles: 1 },
   { name: "call-audio-blocked", required: [...CALL, TID.enableAudio], tiles: 1 },
   { name: "call-peer-failed", required: [...CALL, TID.retryPeer], tiles: 2 },
   { name: "ended", required: ENDED, requiredIos: [TID.installHint, TID.installHintDismiss] },

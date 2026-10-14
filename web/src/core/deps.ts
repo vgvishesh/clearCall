@@ -61,6 +61,10 @@ export interface CoreFlags {
   vmax?: number | undefined;
   /** Video scalabilityMode (`?svc=L1T2|L1T3`) — quality lab experiments only. */
   svc?: string | undefined;
+  /** CPU overload guard off (`?cpuguard=0`, ADR-0010) — quality lab A/B only. */
+  cpuguard?: false | undefined;
+  /** Force the device class (`?devclass=constrained|normal`, ADR-0010) — lab only (a phone in a container). */
+  devclass?: "constrained" | "normal" | undefined;
   /** Mirror debug logs to the console (`?debug=1`). */
   debug: boolean;
   /** Install window.__clearcall (`?qa=1`). */
@@ -83,6 +87,8 @@ export interface CoreDeps {
   mediaCapabilities: MediaCapabilitiesLike | undefined;
   /** `navigator.userAgent` — only for engine-specific media workarounds (codecs.untrustedPowerEfficient). */
   userAgent: string;
+  /** navigator.hardwareConcurrency / deviceMemory (GB) — device class for the codec choice (ADR-0010). */
+  device: { cores?: number | undefined; memoryGb?: number | undefined };
   location: { origin: string; protocol: string; host: string; search: string; href: string };
   history: { replaceState(data: unknown, unused: string, url: string): void } | undefined;
   document: DocumentDeps | undefined;
@@ -147,7 +153,10 @@ export function audioTuningFrom(p: URLSearchParams): AudioTuning | undefined {
  * Video lab overrides: `?vcodec=vp8|vp9|h264|av1` (validated by codecs.forcedVideoOrder), `?vstart=<kbps>`
  * (0…10000) and `?vlevel=base|high`. Absent/invalid → not set, so defaults stay data-driven.
  */
-type VideoLabFlags = Pick<CoreFlags, "vcodec" | "vstart" | "vlevel" | "vmin" | "vmax" | "jbt" | "svc">;
+type VideoLabFlags = Pick<
+  CoreFlags,
+  "vcodec" | "vstart" | "vlevel" | "vmin" | "vmax" | "jbt" | "svc" | "cpuguard" | "devclass"
+>;
 export function videoLabFlags(search: string): VideoLabFlags {
   let p: URLSearchParams;
   try {
@@ -170,6 +179,9 @@ export function videoLabFlags(search: string): VideoLabFlags {
   if (svc === "L1T1" || svc === "L1T2" || svc === "L1T3") out.svc = svc;
   const vlevel = p.get("vlevel");
   if (vlevel === "base" || vlevel === "high") out.vlevel = vlevel;
+  if (p.get("cpuguard") === "0") out.cpuguard = false;
+  const devclass = p.get("devclass");
+  if (devclass === "constrained" || devclass === "normal") out.devclass = devclass;
   return out;
 }
 
@@ -219,6 +231,12 @@ export function defaultDeps(): CoreDeps {
     },
     mediaCapabilities: nav.mediaCapabilities as unknown as MediaCapabilitiesLike | undefined,
     userAgent: typeof nav.userAgent === "string" ? nav.userAgent : "",
+    device: {
+      cores: typeof nav.hardwareConcurrency === "number" ? nav.hardwareConcurrency : undefined,
+      memoryGb: ((m: unknown) => (typeof m === "number" ? m : undefined))(
+        (nav as unknown as { deviceMemory?: unknown }).deviceMemory,
+      ),
+    },
     location: loc,
     history: g.history,
     document: doc,

@@ -157,6 +157,7 @@ describe("QA hook recording", () => {
       dropSignaling: () => {},
       restartIce: () => {},
       killPeer: () => {},
+      simulateCpuOverload: () => {},
       MediaRecorder: FakeRecorder as unknown as typeof MediaRecorder,
     });
     hook.startRecording("p1");

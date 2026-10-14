@@ -34,7 +34,8 @@ One deployable: the Worker serves the app and signaling from the same origin (no
 - **Audio:** Opus, `useinbandfec=1; usedtx=1; maxaveragebitrate=128000` advertised; sender bitrate set with `RTCRtpSender.setParameters`: Voice 32 kbps, Music 96 kbps. RED (`red/48000/2`) preferred via `setCodecPreferences` where supported — **Measure** (keeps if it wins in lossy profiles at acceptable cost in big meshes).
 - **Voice mode** (default): `echoCancellation, noiseSuppression, autoGainControl = true`. ML noise suppression (RNNoise/DeepFilterNet WASM in an AudioWorklet) is a V1.1 track, shipped only if DNSMOS improves without hurting speech (SIG).
 - **Music mode:** re-acquire mic with NS/AGC off (EC stays on), 96 kbps, mono. Switch = `replaceTrack`, no renegotiation.
-- **Video codec:** choose per device using `navigator.mediaCapabilities.encodingInfo({type:"webrtc"})`, preferring `powerEfficient` VP9 → H.264 → VP8 via `setCodecPreferences` — **Measure**.
+- **Video codec:** choose per device using `navigator.mediaCapabilities.encodingInfo({type:"webrtc"})`, preferring `powerEfficient` VP9 → H.264 → VP8 via `setCodecPreferences` — **Measure**. Constrained devices (phones, ≤ 2 cores, ≤ 4 GB) leave software AV1/VP9 out of their preferences entirely, so neither direction can use them (ADR-0010).
+- **CPU overload guard** (`web/src/core/cpu-guard.ts`, ADR-0010): per device from the 1 Hz stats sampler — sustained encoder overload or main-thread starvation → drop software AV1/VP9 + ≤ 360p 15 fps both ways (send caps + capped `view`), then video paused both ways (audio only, camera announced off, UI notice); recovers after 60 s calm with backoff, then keeps the level. `video.cpuLevel` in `__clearcall.stats()`, `CallState.videoLimited` for the UI.
 - **Mesh bandwidth policy** (`web/src/core/policy.ts`, ADR-0005), per outgoing connection:
 
 | Participants | Max encode | Max bitrate per peer | fps |

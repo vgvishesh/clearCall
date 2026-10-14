@@ -4,7 +4,9 @@ import {
   audioCodecOrder,
   chooseVideoCodecOrder,
   codecTier,
+  constrainedDevice,
   forcedVideoOrder,
+  heavyExclusions,
   orderCodecs,
   tierVideoPreference,
   untrustedPowerEfficient,
@@ -235,5 +237,45 @@ describe("tier codec order", () => {
         "video/VP8",
         "video/VP9",
       ]);
+  });
+});
+
+describe("constrained devices (ADR-0010)", () => {
+  const android =
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36";
+  const iphone =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
+  const linux =
+    "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+
+  it("phones, ≤ 2-core and ≤ 4 GB machines are constrained; a 4-core 8 GB desktop is not", () => {
+    expect(constrainedDevice({ userAgent: android, cores: 8, memoryGb: 4 })).toBe("mobile");
+    expect(constrainedDevice({ userAgent: iphone, cores: 6 })).toBe("mobile");
+    expect(constrainedDevice({ userAgent: linux, cores: 2, memoryGb: 8 })).toBe("cores");
+    expect(constrainedDevice({ userAgent: linux, cores: 8, memoryGb: 4 })).toBe("memory");
+    expect(constrainedDevice({ userAgent: linux, cores: 4, memoryGb: 8 })).toBeNull();
+    expect(constrainedDevice({ userAgent: linux })).toBeNull();
+  });
+
+  it("excludes software AV1/VP9 but keeps a hardware one", () => {
+    expect(heavyExclusions(null)).toEqual(["video/AV1", "video/VP9"]);
+    expect(heavyExclusions(["video/H264", "video/VP9"])).toEqual(["video/AV1"]);
+  });
+
+  it("excluded codecs are not offered at all; VP8 leads the 1:1 order", () => {
+    const setCodecPreferences = vi.fn();
+    const t = { setCodecPreferences } as unknown as RTCRtpTransceiver;
+    applyCodecPreferences(
+      t,
+      "video",
+      { codecs: VIDEO },
+      { red: false, videoOrder: null, videoExclude: heavyExclusions(null) },
+      undefined,
+      2,
+    );
+    const mimes = setCodecPreferences.mock.calls[0]![0].map((x: { mimeType: string }) => x.mimeType);
+    expect(mimes).not.toContain("video/AV1");
+    expect(mimes).not.toContain("video/VP9");
+    expect(mimes.slice(0, 2)).toEqual(["video/VP8", "video/H264"]);
   });
 });

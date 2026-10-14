@@ -116,6 +116,18 @@ describe("App", () => {
     expect(c.calls.at(-1)).toEqual({ method: "retryPeer", args: ["p-jonas"] });
   });
 
+  it("video paused notice only while the CPU guard pauses video (ADR-0010)", () => {
+    const c = scenario("call-video-paused");
+    render(<App controller={c} />);
+    expect(screen.getByTestId(TID.videoPausedNotice).textContent).toContain("audio");
+    // Remote tiles show the avatar (peers stopped sending us video), not a frozen frame.
+    for (const t of screen.getAllByTestId(TID.participantTile))
+      expect(t.getAttribute("data-cam")).toBe("false");
+    cleanup();
+    render(<App controller={scenario("call-audio-blocked")} />);
+    expect(screen.queryByTestId(TID.videoPausedNotice)).toBeNull();
+  });
+
   it("reconnecting banner and audio unlock", () => {
     const c = scenario("call-reconnecting");
     render(<App controller={c} />);

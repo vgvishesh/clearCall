@@ -126,6 +126,12 @@ export function summarizePeerStats(
       packetsSent: num(outV?.packetsSent),
       targetBitrate: num(outV?.targetBitrate),
       sentFramesPerSecond: num(outV?.framesPerSecond),
+      sourceFps: num(
+        (outV?.mediaSourceId
+          ? all.get(String(outV.mediaSourceId))
+          : byType("media-source").find((s) => kindOf(s) === "video")
+        )?.framesPerSecond,
+      ),
       keyFramesEncoded: num(outV?.keyFramesEncoded),
       nackReceived: num(outV?.nackCount),
       pliReceived: num(outV?.pliCount),

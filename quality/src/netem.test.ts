@@ -62,6 +62,17 @@ describe("netem command builder", () => {
     expect(egressNetem(linkAt(p, 61), "change").join(" ")).toContain("rate 2000kbit");
   });
 
+  it("home Wi-Fi: heavy-tailed jitter and a deep (bufferbloat) queue that follows the rate", () => {
+    const p = loadProfile("home_wifi_busy");
+    const add = egressNetem(p.link, "add").join(" ");
+    expect(add).toContain("delay 35ms 25ms distribution paretonormal");
+    expect(add).toContain(`rate 30000kbit limit ${queueLimit(30_000, 800)}`);
+    expect(egressNetem(linkAt(p, 26), "change").join(" ")).toContain(
+      `rate 1200kbit limit ${queueLimit(1200, 800)}`,
+    );
+    expect(egressNetem(loadProfile("3g_lossy").link, "add").join(" ")).toContain("distribution normal");
+  });
+
   it("queue limit scales with rate", () => {
     expect(queueLimit(100)).toBe(50);
     expect(queueLimit(20_000)).toBe(417);

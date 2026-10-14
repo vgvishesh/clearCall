@@ -11,7 +11,14 @@ import { batch, signal } from "@preact/signals";
 import { SpeakerTracker } from "./active-speaker.ts";
 import { RemoteAudio } from "./audio-out.ts";
 import type { TimerHandle } from "./clock.ts";
-import { chooseVideoCodecOrder, forcedVideoOrder, untrustedPowerEfficient } from "./codecs.ts";
+import {
+  chooseVideoCodecOrder,
+  constrainedDevice,
+  forcedVideoOrder,
+  heavyExclusions,
+  untrustedPowerEfficient,
+} from "./codecs.ts";
+import { CPU_LEVEL_NAMES, type CpuLevel } from "./cpu-guard.ts";
 import { type CoreDeps, defaultDeps, type WakeLockLike } from "./deps.ts";
 import { createLog, errInfo, type LogSink, short } from "./log.ts";
 import { LocalMedia } from "./media.ts";
@@ -60,6 +67,7 @@ const initialState = (name = ""): CallState => ({
   audioBlocked: false,
   joinedAt: null,
   endedAt: null,
+  videoLimited: null,
 });
 
 /** Map a fatal signaling outcome to the UI error code. */
@@ -142,6 +150,7 @@ class Controller implements CallController {
       dropSignaling: () => this.signaling?.drop(),
       restartIce: (id) => this.transport?.restartIce(id),
       killPeer: (id) => this.transport?.kill(id),
+      simulateCpuOverload: () => this.transport?.simulateCpuOverload(),
       MediaRecorder: deps.MediaRecorder,
       log: this.log.scope("qa"),
     });
@@ -216,7 +225,36 @@ class Controller implements CallController {
 
   private announce(): LocalAnnounce {
     const l = this.state.value.local;
-    return { name: l.name, mic: l.micOn, cam: l.camOn, mode: l.mode };
+    // Video paused by the CPU guard: tell peers the camera is off so they show our avatar, not a frozen frame.
+    const cam = l.camOn && this.state.value.videoLimited !== "paused";
+    return { name: l.name, mic: l.micOn, cam, mode: l.mode };
+  }
+
+  /**
+   * Software AV1/VP9 to leave out of every negotiation (ADR-0010): on a constrained device (phone, ≤ 2 cores,
+   * ≤ 4 GB), unless the browser encodes them in hardware. A lab-forced codec (`?vcodec=`) is never excluded.
+   */
+  private videoExclusions(videoOrder: string[] | null): string[] {
+    const d = this.d;
+    if (d.flags.vcodec) return [];
+    const why =
+      d.flags.devclass === "constrained"
+        ? "flag"
+        : d.flags.devclass === "normal"
+          ? null
+          : constrainedDevice({ userAgent: d.userAgent, cores: d.device.cores, memoryGb: d.device.memoryGb });
+    if (!why) return [];
+    const ex = heavyExclusions(videoOrder);
+    this.L.info("constrained device: no software AV1/VP9", { why, exclude: ex, ...d.device });
+    return ex;
+  }
+
+  private onCpuLevel(level: CpuLevel) {
+    const videoLimited = level === 2 ? "paused" : level === 1 ? "reduced" : null;
+    if (this.state.value.videoLimited === videoLimited) return;
+    this.L.info("video limited", { level: CPU_LEVEL_NAMES[level] });
+    this.patch({ videoLimited });
+    this.transport?.setLocalState(this.announce());
   }
 
   private syncParticipants() {
@@ -350,7 +388,7 @@ class Controller implements CallController {
     const d = this.d;
     const gen = this.generation;
     this.setName(name);
-    this.setPhase("joining", { error: null });
+    this.setPhase("joining", { error: null, videoLimited: null });
     void this.media?.resumeAudioContext();
     this.requestWakeLock();
 
@@ -398,7 +436,10 @@ class Controller implements CallController {
         videoJitterTargetMs: d.flags.jbt,
         videoScalability: d.flags.svc,
         audio: d.flags.audio,
+        videoExclude: this.videoExclusions(videoOrder),
       },
+      ...(d.flags.cpuguard === false ? { cpuGuard: false } : {}),
+      onCpuLevel: (level) => this.onCpuLevel(level),
       getCapabilities: d.getCapabilities,
       ...(d.flags.vlevel ? { levelOverride: d.flags.vlevel } : {}),
       ...(d.flags.relayOnly ? { relayOnly: true } : {}),

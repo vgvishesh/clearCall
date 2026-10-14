@@ -27,6 +27,7 @@ import {
 import type { SendLevel } from "./adaptive.ts";
 import type { Clock, TimerHandle } from "./clock.ts";
 import { applyCodecPreferences, type CodecLike, type CodecPrefs, codecTier } from "./codecs.ts";
+import type { CpuLevel } from "./cpu-guard.ts";
 import { errInfo, type Logger, nullLogger, short } from "./log.ts";
 import {
   audioPolicy,
@@ -140,6 +141,9 @@ export class PeerSession {
   private readonly pendingStats = new Set<(reason: string) => void>();
   private _receivedSignal = false;
   private remoteView: number | undefined;
+  /** CPU overload guard level (ADR-0010) and the codecs it excluded on top of codecPrefs.videoExclude. */
+  private _cpuLevel: CpuLevel = 0;
+  private cpuExclude: readonly string[] = [];
   private participants = 2;
   /** Adaptive send level to this peer (ADR-0008; the mesh decides it from stats). */
   private _sendLevel: SendLevel = "base";
@@ -343,7 +347,11 @@ export class PeerSession {
   }
 
   private applyCodecs() {
-    const prefs = this.o.codecPrefs;
+    const base = this.o.codecPrefs;
+    const prefs =
+      base && this.cpuExclude.length
+        ? { ...base, videoExclude: [...(base.videoExclude ?? []), ...this.cpuExclude] }
+        : base;
     const caps = this.o.getCapabilities;
     if (!prefs || !caps) return;
     if (this.audioTx) applyCodecPreferences(this.audioTx, "audio", caps("audio"), prefs, this.log);
@@ -857,6 +865,30 @@ export class PeerSession {
     return this.applyEncodings();
   }
 
+  get cpuLevel(): CpuLevel {
+    return this._cpuLevel;
+  }
+
+  /** CPU overload guard (ADR-0010): 1 = ≤ 360p 15 fps, 2 = video paused; setParameters only. */
+  setCpuLevel(level: CpuLevel): Promise<void> {
+    if (level === this._cpuLevel) return this.paramsTail;
+    this._cpuLevel = level;
+    return this.applyEncodings();
+  }
+
+  /**
+   * Leave these video codecs out of our preferences and renegotiate (ADR-0010 codec fallback). Our next offer — or
+   * our answer, if the remote offers first — lacks them, so neither direction can keep using them.
+   */
+  excludeVideoCodecs(mimes: readonly string[]): void {
+    const add = mimes.filter((m) => !this.cpuExclude.includes(m));
+    if (!add.length) return;
+    this.cpuExclude = [...this.cpuExclude, ...add];
+    if (!this.bound || this.closed) return; // applies at bind
+    this.applyCodecs();
+    if (this.negotiatedOnce) void this.makeOffer("cpu-codec-fallback");
+  }
+
   /** Adaptive send level (ADR-0008): only the video maxBitrate changes, never the scale. */
   setSendLevel(level: SendLevel): Promise<void> {
     if (level === this._sendLevel) return this.paramsTail;
@@ -874,6 +906,7 @@ export class PeerSession {
         viewHeight: this.remoteView,
         sourceShortSide: local.sourceShortSide,
         level: this._sendLevel,
+        cpuLevel: this._cpuLevel,
       });
       if (this.degradationUnsupported) delete v.degradationPreference;
       if (this._guardCap !== undefined) v.maxBitrate = Math.min(v.maxBitrate, this._guardCap);
@@ -883,6 +916,7 @@ export class PeerSession {
       await this.setParams(sender, (p) => mergeVideoEncoding(p, v), "video", {
         ...v,
         level: this._sendLevel,
+        ...(this._cpuLevel ? { cpuLevel: this._cpuLevel } : {}),
       });
       const applied = sender?.getParameters?.().encodings?.[0]?.maxBitrate;
       if (applied !== undefined) this._videoMaxBitrate = applied;

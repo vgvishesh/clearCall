@@ -46,6 +46,19 @@ describe("parseProfile", () => {
     expect(changePoints(p)).toEqual([30, 60]);
   });
 
+  it("jitter distribution and queue depth (home_wifi)", () => {
+    const p = parseProfile(
+      "x",
+      "link: { up_kbps: 1, down_kbps: 1, jitter_ms: 5, jitter_distribution: paretonormal, queue_ms: 800 }",
+    );
+    expect(p.link.jitter_distribution).toBe("paretonormal");
+    expect(p.link.queue_ms).toBe(800);
+    expect(parseProfile("y", "link: { up_kbps: 1, down_kbps: 1 }").link.jitter_distribution).toBeUndefined();
+    expect(() => parseProfile("z", "link: { up_kbps: 1, down_kbps: 1, jitter_distribution: weird }")).toThrow(
+      /jitter_distribution/,
+    );
+  });
+
   it("rejects invalid profiles with a useful message", () => {
     const bad = [
       ["link: { down_kbps: 1 }", /up_kbps is required/],

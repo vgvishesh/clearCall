@@ -310,6 +310,84 @@ describe("MeshTransport", () => {
     expect(bobSender().params.degradationPreference).toBe("balanced");
   });
 
+  it("CPU overload guard (ADR-0010): AV1 dropped + reduced (360p15, view cap) in one step, then paused", async () => {
+    const w = world();
+    const levels: number[] = [];
+    const caps = () => ({
+      codecs: [
+        { mimeType: "video/AV1", clockRate: 90000 },
+        { mimeType: "video/VP9", clockRate: 90000 },
+        { mimeType: "video/VP8", clockRate: 90000 },
+        { mimeType: "video/H264", clockRate: 90000 },
+      ],
+    });
+    const a = addPeer(w, "Ann", undefined, {
+      getCapabilities: caps,
+      codecPrefs: { red: false, videoOrder: null },
+      onCpuLevel: (l) => levels.push(l),
+    });
+    await settle(30);
+    const b = addPeer(w, "Bob", undefined, {
+      getCapabilities: caps,
+      codecPrefs: { red: false, videoOrder: null },
+    });
+    await settle(60);
+    b.mesh.reportView(a.id, 2000);
+    a.mesh.reportView(b.id, 2000);
+    await settle(20);
+    // Ann's device is starved: encode 33 ms/frame at 20 fps on AV1, then (VP8) 149 ms at 9 fps.
+    let codec = "AV1";
+    let encMs = 33;
+    let fps = 20;
+    let frames = 0;
+    let encTime = 0;
+    pcFor(a, b.id).statsFn = () => {
+      frames += fps;
+      encTime += (encMs * fps) / 1000;
+      return new Map<string, Record<string, unknown>>([
+        ["C", { type: "codec", mimeType: `video/${codec}` }],
+        [
+          "OV",
+          {
+            type: "outbound-rtp",
+            kind: "video",
+            codecId: "C",
+            framesEncoded: frames,
+            totalEncodeTime: encTime,
+            framesPerSecond: fps,
+            qualityLimitationReason: "none",
+          },
+        ],
+      ]);
+    };
+    const tick = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await a.mesh.stats("sampler");
+        await advanceAndSettle(w.clock, 1000, 1000);
+      }
+    };
+    const videoTx = () => pcFor(a, b.id).getTransceivers()[1]!;
+    const prefs = () => (videoTx().codecPreferences as { mimeType: string }[]).map((c) => c.mimeType);
+    expect(prefs()[0]).toBe("video/AV1");
+    await tick(11);
+    // One step: heavy codecs dropped (renegotiated) AND reduced to 360p15 + a 360p view cap.
+    expect(prefs()).not.toContain("video/AV1");
+    expect(prefs()).not.toContain("video/VP9");
+    expect(levels).toEqual([1]);
+    expect(videoTx().sender.params.encodings[0]).toMatchObject({ maxFramerate: 15, active: true });
+    const bToA = () => pcFor(b, a.id).getTransceivers()[1]!.sender.params.encodings[0]!;
+    expect(bToA().scaleResolutionDownBy).toBe(2); // Ann now reports a 360p view: Bob sends her 360p
+    expect((await a.mesh.stats("qa"))[0]!.video.cpuLevel).toBe("reduced");
+    // Still starved at 15 fps (VP8 149 ms/frame at 9 fps) → paused.
+    codec = "VP8";
+    encMs = 149;
+    fps = 9;
+    await tick(10);
+    expect(levels).toEqual([1, 2]);
+    expect(videoTx().sender.params.encodings[0]!.active).toBe(false);
+    expect(bToA().active).toBe(false); // view 0: Bob stops sending video to Ann
+  });
+
   it("2-party calls have no send level and keep 1.5 Mbps", async () => {
     const w = world();
     const a = addPeer(w, "Ann");

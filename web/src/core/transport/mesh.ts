@@ -12,11 +12,12 @@
 import type { ErrorCode, PeerMessage, SignalPayload } from "@clearcall/protocol";
 import { type PairSample, SenderLevels, type SendLevel } from "../adaptive.ts";
 import type { Clock, TimerHandle } from "../clock.ts";
-import type { CodecLike, CodecPrefs } from "../codecs.ts";
+import { type CodecLike, type CodecPrefs, HEAVY_VIDEO } from "../codecs.ts";
+import { CPU_LEVEL_NAMES, CpuGuard, type CpuLevel } from "../cpu-guard.ts";
 import { FloorGuard } from "../floor-guard.ts";
 import { errInfo, type Logger, nullLogger, short } from "../log.ts";
 import { type LocalTracks, type PeerRole, PeerSession } from "../peer-session.ts";
-import { hasLevels, viewChanged, viewToReport } from "../policy.ts";
+import { cpuCappedView, hasLevels, viewChanged, viewToReport } from "../policy.ts";
 import { SerialQueue } from "../serial-queue.ts";
 import type { WelcomeInfo } from "../signaling-client.ts";
 import { summarizePeerStats } from "../stats.ts";
@@ -80,6 +81,10 @@ export interface MeshOptions {
   levelOverride?: SendLevel;
   /** TURN-only media (`?relay=1`): verifies a TURN setup; pairs can't connect if the Worker hands out no TURN. */
   relayOnly?: boolean;
+  /** CPU overload guard (ADR-0010); false = off (`?cpuguard=0`, lab A/B). Default on. */
+  cpuGuard?: boolean;
+  /** The guard's level changed (controller → CallState.videoLimited). */
+  onCpuLevel?: (level: CpuLevel) => void;
   log?: Logger;
   /** Session tunables passthrough (tests). */
   sessionTunables?: Partial<{
@@ -116,8 +121,25 @@ export class MeshTransport implements MediaTransport {
     { session: PeerSession; guard: FloorGuard; bytes?: number; t?: number }
   >();
 
+  /** CPU overload guard (ADR-0010): one per sender — the CPU is shared by every pair. */
+  private readonly cpu: CpuGuard;
+
   constructor(private readonly o: MeshOptions) {
     this.log = o.log ?? nullLogger;
+    // A constrained device already has the heavy codecs excluded: the guard's first step is "reduced".
+    const excluded = o.codecPrefs?.videoExclude ?? [];
+    this.cpu = new CpuGuard({ codecFallback: HEAVY_VIDEO.every((m) => excluded.includes(m)) });
+  }
+
+  private cpuOverloadSim = false;
+
+  simulateCpuOverload(): void {
+    this.cpuOverloadSim = true;
+  }
+
+  /** CPU guard level (0 normal, 1 reduced, 2 paused). */
+  get cpuLevel(): CpuLevel {
+    return this.cpu.level;
   }
 
   // ── presence ──
@@ -271,7 +293,7 @@ export class MeshTransport implements MediaTransport {
 
   private sendView(e: Entry, force = false) {
     if (e.tileHeight === undefined && !this.hidden) return;
-    const v = viewToReport(e.tileHeight ?? 0, this.hidden);
+    const v = cpuCappedView(viewToReport(e.tileHeight ?? 0, this.hidden), this.cpu.level);
     if (!force && !viewChanged(e.viewSent, v)) return;
     if (e.session?.sendCtl({ k: "view", height: v })) e.viewSent = v;
   }
@@ -325,12 +347,14 @@ export class MeshTransport implements MediaTransport {
     if (consumer === ADAPT_CONSUMER && !this.closed) {
       this.adaptLevels(got);
       this.guardFloors(got);
+      this.guardCpu(got);
     }
     const levels = hasLevels(this.participantCount());
     for (const { session, stats } of got) {
       if (levels) stats.video.sendLevel = session.sendLevel;
       if (session.videoMaxBitrate !== undefined) stats.video.sendMaxBitrate = session.videoMaxBitrate;
       if (session.guardCap !== undefined) stats.video.guardCap = session.guardCap;
+      stats.video.cpuLevel = CPU_LEVEL_NAMES[session.cpuLevel];
     }
     return got.map((x) => x.stats);
   }
@@ -375,6 +399,48 @@ export class MeshTransport implements MediaTransport {
       });
       void session.setSendLevel(ch.level);
     }
+  }
+
+  /** One CPU-guard tick for this sender (ADR-0010, cpu-guard.ts), from the same 1 Hz samples. */
+  private guardCpu(got: { e: Entry; session: PeerSession; stats: QaPeerStats }[]) {
+    if (this.o.cpuGuard === false) return;
+    const t = this.o.clock.now();
+    const live = got.filter((g) => g.e.session === g.session && g.stats.connectionState === "connected");
+    if (!live.length) return;
+    const sending = live.filter((g) => (g.stats.video.sentFramesPerSecond ?? 0) > 0);
+    const enc = sending
+      .map((g) => g.stats.video.encodeMsPerFrame)
+      .filter((x): x is number => x !== undefined);
+    const fps = sending.map((g) => g.stats.video.sentFramesPerSecond!);
+    const heavy = live.some((g) =>
+      HEAVY_VIDEO.some((m) => m.toLowerCase() === `video/${(g.stats.video.codec ?? "").toLowerCase()}`),
+    );
+    const src = sending.map((g) => g.stats.video.sourceFps).filter((x): x is number => x !== undefined);
+    const sim = this.cpuOverloadSim;
+    const action = this.cpu.update({
+      t,
+      encodeMs: sim ? 150 : enc.length ? Math.max(...enc) : undefined,
+      sentFps: sim ? 5 : fps.length ? Math.min(...fps) : undefined,
+      sourceFps: sim ? undefined : src.length ? Math.max(...src) : undefined,
+      cpuLimited: live.some((g) => g.stats.video.qualityLimitationReason === "cpu"),
+      heavyCodec: heavy,
+      hidden: this.hidden,
+    });
+    if (!action) return;
+    this.log.info("cpu guard", {
+      level: CPU_LEVEL_NAMES[action.level],
+      reason: action.reason,
+      ...(action.codecFallback ? { codecFallback: true } : {}),
+      encodeMs: enc.length ? Math.max(...enc) : null,
+      sentFps: fps.length ? Math.min(...fps) : null,
+    });
+    for (const e of this.roster.values()) {
+      // Caps first, then the codec switch: the new encoder must start at the reduced size.
+      void e.session?.setCpuLevel(action.level);
+      if (action.codecFallback) e.session?.excludeVideoCodecs(HEAVY_VIDEO);
+      this.sendView(e);
+    }
+    this.o.onCpuLevel?.(action.level);
   }
 
   /** One floor-guard tick per pair (ADR-0009, floor-guard.ts): app-layer back-off below the SDP floor. */
@@ -556,6 +622,10 @@ export class MeshTransport implements MediaTransport {
       },
     });
     e.session = session;
+    // A rebuilt pc inherits this sender's CPU-guard state (it is per device, not per pair).
+    if (this.cpu.codecFallback && !HEAVY_VIDEO.every((m) => this.o.codecPrefs?.videoExclude?.includes(m)))
+      session.excludeVideoCodecs(HEAVY_VIDEO);
+    if (this.cpu.level) void session.setCpuLevel(this.cpu.level);
     session.setParticipants(this.participantCount());
     this.update(e, { status: "connecting", stream: null });
   }

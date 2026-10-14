@@ -95,6 +95,12 @@ export interface RemoteParticipant {
   speaking: boolean;
 }
 
+/**
+ * Our device can't keep up with video (CPU overload guard, ADR-0010): "reduced" = video sent and received at ≤ 360p
+ * 15 fps; "paused" = video off both ways so audio stays clear. null = normal. Recovers by itself.
+ */
+export type VideoLimit = "reduced" | "paused" | null;
+
 export interface CallState {
   phase: CallPhase;
   error: CallError | null;
@@ -111,6 +117,8 @@ export interface CallState {
   joinedAt: number | null;
   /** Epoch ms when the call ended (Ended screen shows endedAt - joinedAt). */
   endedAt: number | null;
+  /** Local device overload: video stepped down or paused to protect audio (UI shows a calm notice for "paused"). */
+  videoLimited: VideoLimit;
 }
 
 export interface CallController {
@@ -169,7 +177,14 @@ export interface QaHook {
   startRecording(participantId: string): void;
   stopRecording(participantId: string): Promise<Blob | null>;
   /** Fault injection for resilience tests. */
-  inject(fault: "drop-signaling" | "restart-ice" | "kill-peer", participantId?: string): void;
+  /**
+   * `cpu-overload`: from now on the CPU guard (ADR-0010) sees this device as starved (encode 150 ms/frame at 5 fps),
+   * so E2E can drive its steps in real browsers.
+   */
+  inject(
+    fault: "drop-signaling" | "restart-ice" | "kill-peer" | "cpu-overload",
+    participantId?: string,
+  ): void;
 }
 
 export type TransportKind = "mesh" | "sfu";
@@ -252,6 +267,10 @@ export interface QaPeerStats {
     sendMaxBitrate?: number;
     /** Floor-guard cap on our video to this peer (bps, ADR-0009); absent = none. */
     guardCap?: number;
+    /** Camera frames per second (media-source stats) — the CPU guard's expected send rate. */
+    sourceFps?: number;
+    /** CPU overload guard level of this device (ADR-0010): normal | reduced | paused. */
+    cpuLevel?: "normal" | "reduced" | "paused";
     // Loss-recovery attribution (cumulative counters; lab/diag diff them). Sender side = our stream to this peer.
     /** outbound-rtp retransmittedBytesSent (RTX payload, a subset of bytesSent). */
     retransmittedBytesSent?: number;

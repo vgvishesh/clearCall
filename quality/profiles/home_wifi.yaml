@@ -1,0 +1,16 @@
+# Home broadband over Wi-Fi (bug report 2026-10-14: 300/300 and 30/30 Mbps fibre, India, 1:1 call unusable).
+# Capacity is plentiful; the path is not clean: Wi-Fi aggregation/retries give heavy-tailed delay spikes
+# (paretonormal: mostly a few ms, sometimes 40–80 ms), bursty loss ~1 %, RTT ≈ 2 × 35 ms + spikes.
+link:
+  up_kbps: 30000
+  down_kbps: 30000
+  delay_ms: 35
+  jitter_ms: 25
+  jitter_distribution: paretonormal
+  loss_pct: 1
+  loss_model: gilbert
+topology: p2p
+duration_s: 90
+corpus: [speech_noisy, talking_head]
+mode: voice
+seed: 1

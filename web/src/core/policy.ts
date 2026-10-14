@@ -11,6 +11,7 @@
  * and our own hidden tab makes us report view 0 to everyone (they pause sending to us).
  */
 import type { SendLevel } from "./adaptive.ts";
+import type { CpuLevel } from "./cpu-guard.ts";
 import type { AudioMode } from "./types.ts";
 
 export interface Tier {
@@ -60,6 +61,17 @@ export interface VideoPolicyInput {
   sourceShortSide?: number | undefined;
   /** Adaptive send level; only the 3–4 tier at its full 360p target uses it. undefined = base. */
   level?: SendLevel | undefined;
+  /** CPU overload guard (ADR-0010): 1 = ≤ 360p at 15 fps, 2 = video paused. undefined/0 = normal. */
+  cpuLevel?: CpuLevel | undefined;
+}
+
+/** The reduced level's caps (ADR-0010). */
+export const CPU_REDUCED = { height: 360, fps: 15 } as const;
+
+/** The view we report to a sender under the CPU guard: reduced caps it at 360p, paused asks for nothing. */
+export function cpuCappedView(view: number, level: CpuLevel | undefined): number {
+  if (!level || view === 0) return view;
+  return level >= 2 ? 0 : Math.min(view, CPU_REDUCED.height);
 }
 
 export interface VideoEncodeCaps {
@@ -88,9 +100,14 @@ export function levelEligible(participants: number, targetHeight: number): boole
 export function videoPolicy(input: VideoPolicyInput): VideoEncodeCaps {
   const tier = tierFor(Math.max(1, input.participants));
   const view = input.viewHeight;
-  const active = view === undefined || view > 0;
+  const cpu = input.cpuLevel ?? 0;
+  const active = (view === undefined || view > 0) && cpu < 2;
   const viewRung = view !== undefined && view > 0 ? rungFor(view) : undefined;
-  const targetHeight = Math.min(tier.maxHeight, viewRung?.height ?? tier.maxHeight);
+  const targetHeight = Math.min(
+    tier.maxHeight,
+    viewRung?.height ?? tier.maxHeight,
+    cpu >= 1 ? CPU_REDUCED.height : Number.POSITIVE_INFINITY,
+  );
   const high = input.level === "high" && levelEligible(input.participants, targetHeight);
   // High never changes the scale (Firefox's H264 sender stalls on scale changes): bitrate + degradation preference.
   const maxBitrate = high ? TIER4_HIGH_BITRATE : Math.min(tier.maxBitrate, rungFor(targetHeight).bitrate);
@@ -100,7 +117,7 @@ export function videoPolicy(input: VideoPolicyInput): VideoEncodeCaps {
     active,
     targetHeight,
     maxBitrate,
-    maxFramerate: tier.maxFramerate,
+    maxFramerate: cpu >= 1 ? Math.min(tier.maxFramerate, CPU_REDUCED.fps) : tier.maxFramerate,
     scaleResolutionDownBy,
     ...(high ? { degradationPreference: "maintain-resolution" as const } : {}),
   };

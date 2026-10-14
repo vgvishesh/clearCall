@@ -7,6 +7,20 @@ const chromiumMedia = [
   "--autoplay-policy=no-user-gesture-required",
 ];
 
+/**
+ * `E2E_REMOTE_WS` (set by `scripts/e2e.sh` with E2E_DOCKER=1): Chromium runs in the lab's Docker image behind a
+ * Playwright run-server (hosts where local browsers can't launch). Launch args travel in the connect header.
+ */
+const remoteWs = process.env.E2E_REMOTE_WS;
+const chromiumUse = remoteWs
+  ? {
+      connectOptions: {
+        wsEndpoint: remoteWs,
+        headers: { "x-playwright-launch-options": JSON.stringify({ args: chromiumMedia, headless: true }) },
+      },
+    }
+  : { launchOptions: { args: chromiumMedia } };
+
 /** Heavy specs (10-party mesh, room-full): only ever run in the `capacity` project, alone, after everything else. */
 const CAPACITY = /call-large\.spec\.ts/;
 
@@ -36,7 +50,7 @@ export default defineConfig({
       name: "chromium",
       testIgnore: [/screens\//, CAPACITY],
       teardown: "capacity",
-      use: { ...devices["Desktop Chrome"], launchOptions: { args: chromiumMedia } },
+      use: { ...devices["Desktop Chrome"], ...chromiumUse },
     },
     {
       name: "firefox",
@@ -71,7 +85,7 @@ export default defineConfig({
       // Screenshot suite (make screenshots): FakeCallController scenarios at phone + desktop sizes.
       name: "screens",
       testMatch: /screens\/.*\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], launchOptions: { args: chromiumMedia } },
+      use: { ...devices["Desktop Chrome"], ...chromiumUse },
     },
   ],
 });

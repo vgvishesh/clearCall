@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { synthTimeline } from "./fixtures.ts";
-import { buildMetrics, errMsg, joinTtffFrom, parseLinkOverride, statsGapMaxS } from "./lab.ts";
+import { buildMetrics, errMsg, joinTtffFrom, parseCpus, parseLinkOverride, statsGapMaxS } from "./lab.ts";
 import { summarizeTimeline } from "./metrics.ts";
 import { loadProfile } from "./profiles.ts";
 import type { DirectionResult } from "./report.ts";
@@ -139,5 +139,14 @@ describe("statsGapMaxS (lab health)", () => {
     const tl = (ts: number[]) => ts.map((t) => ({ t, local: {}, peers: [] }));
     expect(statsGapMaxS({ p0: tl([0, 1000, 2000, 6500]), p1: tl([0, 1000, 3000]) }, 500)).toBe(4.5);
     expect(statsGapMaxS({ p0: tl([0, 9000]) }, 1000)).toBeNull();
+  });
+});
+
+describe("parseCpus", () => {
+  it("maps participant index to cores", () => {
+    expect(parseCpus("p1=0.5, p0=2")).toEqual({ 1: 0.5, 0: 2 });
+    expect(parseCpus("1=1")).toEqual({ 1: 1 });
+    expect(() => parseCpus("p1=0")).toThrow(/--cpus/);
+    expect(() => parseCpus("x=1")).toThrow(/--cpus/);
   });
 });

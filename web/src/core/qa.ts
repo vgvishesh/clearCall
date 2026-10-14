@@ -14,6 +14,7 @@ export interface QaSources {
   dropSignaling: () => void;
   restartIce: (participantId?: string) => void;
   killPeer: (participantId?: string) => void;
+  simulateCpuOverload: () => void;
   MediaRecorder?: typeof MediaRecorder | undefined;
   log?: Logger;
 }
@@ -97,6 +98,7 @@ export function createQaHook(src: QaSources): QaHook {
       if (fault === "drop-signaling") src.dropSignaling();
       else if (fault === "restart-ice") src.restartIce(participantId);
       else if (fault === "kill-peer") src.killPeer(participantId);
+      else if (fault === "cpu-overload") src.simulateCpuOverload();
     },
   };
 }

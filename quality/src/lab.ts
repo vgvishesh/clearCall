@@ -4,6 +4,7 @@
  *   pnpm --filter @clearcall/quality lab --profile <name|all> [--netem] [--url http://localhost:8787]
  *        [--duration <s>] [--no-voice-baseline] [--keep-work] [--flags "abr=40000&ns=0"] [--tag <label>]
  *        [--participants N] [--shared-browser] [--viewport 390x844@3] [--latency] [--emulate-loss 5]
+ *        [--cpus p1=0.5 (netem)] [--hd]
  *   pnpm --filter @clearcall/quality lab --selftest [--seconds 20] [--kbps 1000] [--rec-kbps 8000] [--vcodec vp9] (no app needed)
  *
  * Per profile: N headless Chromium participants (one browser each) fed with reference media
@@ -13,7 +14,7 @@
  * "proposed"). Output: quality/reports/<ts>-<profile>/report.{json,md} + recordings + per-peer timelines/logs.
  * Exit 1 on any breach or session error. Without --netem the run is labelled UNSHAPED.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import { join } from "node:path";
 import type { Browser } from "@playwright/test";
@@ -90,6 +91,28 @@ export interface LabOptions {
    * use it.
    */
   linkOverride?: string;
+  /**
+   * Per-participant CPU limit in cores (`--cpus p1=0.5,p0=2`; netem only: `docker update --cpus` on that peer's
+   * container, so the whole browser — encoder and decoder threads included — is starved, like a weak phone/laptop).
+   */
+  cpus?: Record<number, number>;
+  /** Feed a 1280×720 upscale of the video corpus as the camera (real phones/laptops capture 720p); scored at 360p. */
+  hd?: boolean;
+}
+
+/** `p1=0.5,p0=2` → {1: 0.5, 0: 2}. Throws on bad input. */
+export function parseCpus(spec: string): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (const part of spec
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)) {
+    const m = /^p?(\d+)=([\d.]+)$/.exec(part);
+    const cores = m ? Number(m[2]) : Number.NaN;
+    if (!m || !(cores > 0)) throw new Error(`--cpus: expected p<index>=<cores>, got ${part}`);
+    out[Number(m[1])] = cores;
+  }
+  return out;
 }
 
 /** `jitter_ms=0,loss_model=random` → a LinkState patch. Throws on unknown keys or bad values. */
@@ -180,6 +203,27 @@ async function joinerTtff(peers: Peer[]): Promise<(number | null)[]> {
   );
 }
 
+/** 1280×720 upscale of a 640×360 corpus y4m, cached next to it (the frame-ID barcode scales with it). */
+export async function hdVariant(ref: string): Promise<string> {
+  const out = ref.replace(/\.y4m$/, "_720.y4m");
+  if (existsSync(out)) return out;
+  log(`making ${out} (1280×720 camera for --hd)`);
+  await run("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-i",
+    ref,
+    "-vf",
+    "scale=1280:720:flags=bicubic",
+    "-pix_fmt",
+    "yuv420p",
+    `${out}.tmp.y4m`,
+  ]);
+  renameSync(`${out}.tmp.y4m`, out);
+  return out;
+}
+
 /** One call session: launch, join, (shape), record, collect. Never throws — failures land in `errors`. */
 export async function runSession(
   profile: Profile,
@@ -212,16 +256,24 @@ export async function runSession(
     // ── launch ──
     let appUrl = opts.appUrl;
     let extraArgs: string[] = [];
-    let mediaPaths = { video: videoRef, audio: audioRef };
+    const camera = opts.hd ? await hdVariant(videoRef) : videoRef;
+    if (opts.hd) notes.push("camera: 1280×720 bicubic upscale of the corpus (--hd); VMAF scored at 640×360");
+    let mediaPaths = { video: camera, audio: audioRef };
     if (opts.netem) {
       await ensureImage();
       await ensureNetwork();
       const c = containerAppUrl(opts.appUrl);
       appUrl = c.url;
       extraArgs = c.args;
-      mediaPaths = { video: containerMediaPath(videoRef), audio: containerMediaPath(audioRef) };
-      for (let i = 0; i < n; i++)
+      mediaPaths = { video: containerMediaPath(camera), audio: containerMediaPath(audioRef) };
+      for (let i = 0; i < n; i++) {
         containers.push(await startPeerContainer(i, linkAt(profile, 0), opts.appUrl));
+        const cores = opts.cpus?.[i];
+        if (cores !== undefined) {
+          await run("docker", ["update", "--cpus", String(cores), containers[i]!.name]);
+          notes.push(`p${i} CPU-limited to ${cores} core(s) (docker --cpus, whole browser)`);
+        }
+      }
       if (containers.some((c) => !c.ingressShaped))
         notes.push(
           "downlink (down_kbps) NOT shaped: ifb unavailable in the Docker VM kernel; uplink shaping only",
@@ -566,6 +618,22 @@ export function buildMetrics(
       (h): h is number => typeof h === "number",
     );
     if (heights.length) m.frame_height = Math.min(...heights);
+    // CPU-starved peers: worst received frame rate, slowest decoder, and how often a sender was CPU-limited.
+    const rfps = P.flatMap((p) => p.summary.remotes.map((r) => r.fps_mean)).filter(
+      (x): x is number => typeof x === "number",
+    );
+    if (rfps.length) m.recv_fps_min = Math.min(...rfps);
+    const dec = maxOrNull(P.flatMap((p) => p.summary.remotes.map((r) => r.decode_ms_mean)));
+    if (dec !== null) m.decode_ms = dec;
+    const cpuLim = maxOrNull(
+      P.flatMap((p) =>
+        p.summary.remotes.map((r) => {
+          const all = Object.values(r.quality_limitation).reduce((a, b) => a + b, 0);
+          return all ? (r.quality_limitation.cpu ?? 0) / all : null;
+        }),
+      ),
+    );
+    if (cpuLim !== null) m.cpu_limited_ratio = cpuLim;
     if (s.proc_cpu_pct !== undefined && s.proc_cpu_pct !== null) {
       m.proc_cpu_pct = s.proc_cpu_pct;
       m.proc_cpu_pct_per_peer = s.proc_cpu_pct / P.length;
@@ -774,7 +842,13 @@ async function main() {
     ...(a.has("shared-browser") ? { sharedBrowser: true } : {}),
     ...(a.get("viewport") ? { viewport: a.get("viewport")! } : {}),
     ...(a.get("link") ? { linkOverride: a.get("link")! } : {}),
+    ...(a.get("cpus") ? { cpus: parseCpus(a.get("cpus")!) } : {}),
+    ...(a.has("hd") ? { hd: true } : {}),
   };
+  if (opts.cpus && !opts.netem) {
+    console.error("--cpus needs --netem (per-peer containers)");
+    process.exit(2);
+  }
   if (!opts.netem) log("UNSHAPED run (no --netem): network profile values are not enforced");
   const names = which === "all" ? listProfiles() : [which];
   let breached = false;

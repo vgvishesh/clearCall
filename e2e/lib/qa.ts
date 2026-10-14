@@ -56,7 +56,7 @@ export async function qaTimeline(page: Page): Promise<QaStatsSample[]> {
 
 export async function qaInject(
   page: Page,
-  fault: "drop-signaling" | "restart-ice" | "kill-peer",
+  fault: "drop-signaling" | "restart-ice" | "kill-peer" | "cpu-overload",
   participantId?: string,
 ): Promise<void> {
   await page.evaluate(

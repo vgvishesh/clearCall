@@ -844,6 +844,18 @@ p {
   animation: rise var(--dur) var(--ease);
 }
 
+/* Informational, not an alarm (ADR-0010 video paused): quieter than the reconnecting banner. */
+.banner--calm {
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 500;
+}
+
 .call__footer {
   position: absolute;
   left: 0;

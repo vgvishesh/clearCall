@@ -87,6 +87,7 @@ const builders: Record<string, () => Scenario> = {
     hints: { moreOpen: true },
   }),
   "call-reconnecting": () => ({ options: inCall(4, { phase: "reconnecting" }) }),
+  "call-video-paused": () => ({ options: inCall(2, { videoLimited: "paused" }) }),
   "call-audio-blocked": () => ({ options: inCall(2, { audioBlocked: true }) }),
   "call-peer-failed": () => ({
     options: inCall(3, {}, [CAST[0]!, { ...CAST[1]!, status: "failed", camOn: false }]),

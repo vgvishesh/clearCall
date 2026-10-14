@@ -81,7 +81,8 @@ export function Call() {
     const rect = layout.rects[p.id];
     if (!rect) continue;
     tiles.push({
-      model: { ...p, isSelf: false },
+      // Video paused by the CPU guard (ADR-0010): peers stopped sending us video — show their avatar, not a frozen frame.
+      model: { ...p, camOn: p.camOn && s.videoLimited !== "paused", isSelf: false },
       rect,
       variant:
         layout.fullBleedId === p.id
@@ -200,6 +201,11 @@ export function Call() {
           <div class="banner" data-testid={TID.reconnectingBanner} role="status">
             <span class="spinner" aria-hidden="true" />
             Reconnecting…
+          </div>
+        )}
+        {s.phase !== "reconnecting" && s.videoLimited === "paused" && (
+          <div class="banner banner--calm" data-testid={TID.videoPausedNotice} role="status">
+            Video paused for clear audio
           </div>
         )}
       </header>

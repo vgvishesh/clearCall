@@ -149,6 +149,39 @@ export async function chooseVideoCodecOrder(
   }
 }
 
+/**
+ * Software-heavy video codecs (ADR-0010). Lab, 720p camera, one peer limited to 1 core: software AV1 encodes at
+ * 33 ms/frame vs 4 ms for VP8/H264 (8×), the starved peer sends 20 fps instead of 29, and the remote's audio
+ * concealment rises to 2.9 % (vs 0.1–0.4 %). VP9 is in the same class (W4: +60 % CPU over VP8). Chrome reports no
+ * `cpu` quality limitation for AV1, so libwebrtc's own CPU adaptation never kicks in.
+ */
+export const HEAVY_VIDEO: readonly string[] = ["video/AV1", "video/VP9"];
+
+export interface DeviceInfo {
+  userAgent: string;
+  /** navigator.hardwareConcurrency */
+  cores?: number | undefined;
+  /** navigator.deviceMemory (GB, Chromium only, capped at 8) */
+  memoryGb?: number | undefined;
+}
+
+/**
+ * Why this device should never run a software AV1/VP9 encoder or decoder, or null. Phones and tablets (their cores
+ * are 4–8× slower than a laptop's and they throttle when hot: the owner's 2026-10-14 call was an old Android phone),
+ * and laptops with ≤ 2 cores or ≤ 4 GB. A lab peer (Linux desktop, 4 vCPU, 8 GB) is not constrained.
+ */
+export function constrainedDevice(d: DeviceInfo): "mobile" | "cores" | "memory" | null {
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(d.userAgent)) return "mobile";
+  if (d.cores !== undefined && d.cores > 0 && d.cores <= 2) return "cores";
+  if (d.memoryGb !== undefined && d.memoryGb > 0 && d.memoryGb <= 4) return "memory";
+  return null;
+}
+
+/** Heavy codecs to leave out of our preferences (so neither direction can use them), keeping hardware ones. */
+export function heavyExclusions(keep: readonly string[] | null): string[] {
+  return HEAVY_VIDEO.filter((m) => !keep?.some((k) => lower(k) === lower(m)));
+}
+
 /** Full video mime order: forced / power-efficient codecs first, then the tier's software order. */
 export function videoOrderFor(first: readonly string[] | null, participants: number): string[] {
   return [...(first ?? []), ...tierVideoPreference(participants)];
@@ -170,6 +203,11 @@ export interface CodecPrefs {
   videoOrder: string[] | null;
   /** Lab overrides for Opus bitrate/DTX/FEC (URL flags); absent = defaults. */
   audio?: AudioTuning | undefined;
+  /**
+   * Video codecs left out of our preferences entirely (ADR-0010: software AV1/VP9 on constrained devices or after a
+   * CPU overload). Leaving them out of our offer/answer means neither direction can pick them, whoever answers.
+   */
+  videoExclude?: readonly string[] | undefined;
 }
 
 /** Apply preferences to a transceiver before an offer/answer is created. Never throws. */
@@ -184,7 +222,11 @@ export function applyCodecPreferences(
   if (!capabilities?.codecs?.length || typeof transceiver.setCodecPreferences !== "function") return;
   let ordered: CodecLike[];
   if (kind === "audio") ordered = audioCodecOrder(capabilities.codecs, prefs.red);
-  else ordered = orderCodecs(capabilities.codecs, videoOrderFor(prefs.videoOrder, participants));
+  else {
+    const ex = prefs.videoExclude ?? [];
+    const allowed = capabilities.codecs.filter((c) => !ex.some((m) => lower(m) === lower(c.mimeType)));
+    ordered = orderCodecs(allowed, videoOrderFor(prefs.videoOrder, participants));
+  }
   try {
     transceiver.setCodecPreferences(ordered as RTCRtpCodec[]);
   } catch (e) {

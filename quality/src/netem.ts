@@ -85,7 +85,8 @@ export function egressNetem(
   const a = ["tc", "qdisc", op, "dev", dev, ...where, "netem"];
   if (link.delay_ms > 0 || link.jitter_ms > 0) {
     a.push("delay", `${link.delay_ms}ms`);
-    if (link.jitter_ms > 0) a.push(`${link.jitter_ms}ms`, "distribution", "normal");
+    if (link.jitter_ms > 0)
+      a.push(`${link.jitter_ms}ms`, "distribution", link.jitter_distribution ?? "normal");
   }
   if (link.loss_pct > 0) {
     if (link.loss_model === "gilbert") {
@@ -95,7 +96,8 @@ export function egressNetem(
   }
   a.push("rate", `${link.up_kbps}kbit`);
   // Queue sized for ~200 ms at the shaped rate (min 50 pkts) — bufferbloat-ish but bounded, like a phone uplink.
-  a.push("limit", String(queueLimit(link.up_kbps)));
+  // Profiles may set queue_ms (home routers: 300–1000 ms).
+  a.push("limit", String(queueLimit(link.up_kbps, link.queue_ms)));
   return a;
 }
 

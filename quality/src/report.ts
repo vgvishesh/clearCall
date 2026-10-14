@@ -192,6 +192,9 @@ export const METRIC_SPEC: Record<
   proc_cpu_pct_per_peer: { better: "lower", noise: 0.1, rel: true },
   send_kbps: { better: "lower", noise: 0.03, rel: true },
   frame_height: { better: "higher", noise: 10 },
+  recv_fps_min: { better: "higher", noise: 1 },
+  decode_ms: { better: "lower", noise: 0.5 },
+  cpu_limited_ratio: { better: "lower", noise: 0.02 },
   adapt_down_s: { better: "lower", noise: 1 },
   recover_up_s: { better: "lower", noise: 1 },
 };

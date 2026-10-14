@@ -12,8 +12,19 @@ export interface LinkState {
   jitter_ms: number;
   loss_pct: number;
   loss_model: "random" | "gilbert";
+  /**
+   * netem delay distribution for the jitter: normal (default) or a heavy-tailed one — `paretonormal` models Wi-Fi
+   * (mostly a few ms, occasional 20–80 ms aggregation/retry spikes), `pareto` is spikier still.
+   */
+  jitter_distribution?: JitterDistribution;
+  /** Egress queue depth in ms at the shaped rate (default 200). Home routers buffer 300–1000 ms (bufferbloat). */
+  queue_ms?: number;
 }
-export type LinkStep = Partial<Omit<LinkState, "loss_model">> & { at_s: number };
+export type JitterDistribution = "normal" | "pareto" | "paretonormal";
+const DISTRIBUTIONS: JitterDistribution[] = ["normal", "pareto", "paretonormal"];
+export type LinkStep = Partial<Omit<LinkState, "loss_model" | "jitter_distribution" | "queue_ms">> & {
+  at_s: number;
+};
 
 export interface Profile {
   name: string;
@@ -69,6 +80,14 @@ export function parseProfile(name: string, text: string): Profile {
   if (lossModel !== "random" && lossModel !== "gilbert")
     throw new ProfileError(where(`link.loss_model must be random|gilbert, got ${String(lossModel)}`));
 
+  const dist = link.jitter_distribution ?? "normal";
+  if (!DISTRIBUTIONS.includes(dist as JitterDistribution))
+    throw new ProfileError(where(`link.jitter_distribution must be ${DISTRIBUTIONS.join("|")}`));
+  const queueMs =
+    link.queue_ms === undefined
+      ? undefined
+      : num(link.queue_ms, where("link.queue_ms"), { min: 10, max: 5000 });
+
   const topology = raw.topology ?? "p2p";
   if (topology !== "p2p" && topology !== "mesh") throw new ProfileError(where("topology must be p2p|mesh"));
   const participants =
@@ -103,6 +122,8 @@ export function parseProfile(name: string, text: string): Profile {
       jitter_ms: pick("jitter_ms", 0),
       loss_pct: pick("loss_pct", 0),
       loss_model: lossModel,
+      ...(dist !== "normal" ? { jitter_distribution: dist as JitterDistribution } : {}),
+      ...(queueMs !== undefined ? { queue_ms: queueMs } : {}),
     },
     schedule,
     topology,

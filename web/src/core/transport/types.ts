@@ -76,6 +76,8 @@ export interface MediaTransport {
   retry(participantId: string): void;
   restartIce(participantId?: string): void;
   kill(participantId?: string): void;
+  /** QA fault: the CPU guard sees this device as starved from now on (ADR-0010). */
+  simulateCpuOverload(): void;
   /** Send a `ctl` message to everyone with an open channel. */
   broadcast(msg: PeerMessage): void;
   close(opts?: { bye?: boolean }): void;

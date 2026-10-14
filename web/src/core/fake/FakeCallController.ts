@@ -59,6 +59,7 @@ export function emptyState(): CallState {
     audioBlocked: false,
     joinedAt: null,
     endedAt: null,
+    videoLimited: null,
   };
 }
 

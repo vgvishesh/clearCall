@@ -138,6 +138,20 @@ describe("summarizePeerStats", () => {
     expect(stats.audio).toMatchObject({ targetBitrate: 32_000, fecPacketsReceived: 4 });
   });
 
+  it("reads the camera frame rate from the sender's media-source (CPU guard input)", () => {
+    const r = chromeReport();
+    Object.assign(r.get("OV")!, { mediaSourceId: "MS" });
+    r.set("MS", { type: "media-source", kind: "video", framesPerSecond: 15 });
+    const { stats } = summarizePeerStats(r, { id: "p", name: "Ann", connectionState: "connected" }, 1000);
+    expect(stats.video.sourceFps).toBe(15);
+    const plain = summarizePeerStats(
+      chromeReport(),
+      { id: "p", name: "Ann", connectionState: "connected" },
+      1000,
+    );
+    expect(plain.stats.video.sourceFps).toBeUndefined();
+  });
+
   it("computes kbps, interval loss and interval encode cost from the previous sample", () => {
     const first = summarizePeerStats(
       chromeReport(1),

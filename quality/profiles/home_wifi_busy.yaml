@@ -1,0 +1,22 @@
+# home_wifi + a busy household: someone else's upload (cloud backup, video upload) takes most of the uplink twice
+# during the call, and the home router buffers ~800 ms (bufferbloat). Tests that the call degrades gracefully
+# (audio stays clean, video steps down) and recovers when the cross-traffic stops.
+link:
+  up_kbps: 30000
+  down_kbps: 30000
+  delay_ms: 35
+  jitter_ms: 25
+  jitter_distribution: paretonormal
+  loss_pct: 1
+  loss_model: gilbert
+  queue_ms: 800
+  schedule:
+    - { at_s: 25, up_kbps: 1200 }
+    - { at_s: 45, up_kbps: 30000 }
+    - { at_s: 60, up_kbps: 800 }
+    - { at_s: 75, up_kbps: 30000 }
+topology: p2p
+duration_s: 90
+corpus: [speech_noisy, talking_head]
+mode: voice
+seed: 1

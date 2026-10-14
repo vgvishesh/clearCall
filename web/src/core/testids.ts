@@ -34,6 +34,8 @@ export const TID = {
   musicModeToggle: "music-mode-toggle",
   leaveButton: "leave-button",
   reconnectingBanner: "reconnecting-banner",
+  /** CallState.videoLimited === "paused": this device is overloaded, video paused to keep audio clear (ADR-0010). */
+  videoPausedNotice: "video-paused-notice",
   enableAudio: "enable-audio",
   retryPeer: "retry-peer",
   /** Close button of a bottom sheet / panel (e.g. the More sheet). */
