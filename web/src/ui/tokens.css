@@ -66,10 +66,15 @@
   --t-xl: 28px;
   --t-2xl: 36px;
   --lh: 1.45;
+  /* Permission coach: bigger type for older eyes (≥ 18 px body). */
+  --t-coach: 18px;
+  --t-coach-title: 24px;
+  --t-coach-title-s: 21px;
 
   /* Sizes */
   --tap: 48px;
   --btn-h: 56px;
+  --btn-coach-h: 60px;
   --ctl: clamp(48px, 12.5vw, 60px);
   --ctl-gap: clamp(6px, 2.2vw, 16px);
   --header-h: 56px;

@@ -45,10 +45,34 @@ export async function closeParticipant(p: Participant): Promise<void> {
   if (p.ownBrowser) await p.ownBrowser.close().catch(() => {});
 }
 
-/** Lobby → fill name → Join → call screen. */
+/**
+ * Permission coach: when the lobby shows the "Get ready" step (`local.mediaRequest === "not-asked"`: Firefox/WebKit
+ * contexts without pre-granted permissions, or any browser whose Permissions API doesn't report "granted"), tap
+ * "Turn on camera & mic" once, from a real click. When permissions are pre-granted (Chromium projects) the controller
+ * acquires on its own and nothing is tapped. Resolves once the request has started ("asking") or finished ("done").
+ * Polls the QA state — no fixed waits; a controller without `mediaRequest` (pre-coach build) counts as "done".
+ */
+export async function allowMediaIfAsked(page: Page, timeout = 15_000): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const req = (await qaState(page)).local.mediaRequest ?? "done";
+        if (req !== "not-asked") return req;
+        const allow = page.locator(tid(TID.allowMedia));
+        // The prime can vanish between isVisible and click (prepare() finishing its permission query) — retry.
+        if (await allow.isVisible()) await allow.click({ timeout: 1_000 }).catch(() => {});
+        return req;
+      },
+      { timeout, intervals: [100, 250, 500], message: "camera/mic request never started (Get ready step)" },
+    )
+    .not.toBe("not-asked");
+}
+
+/** Lobby → (tap "Turn on camera & mic" if asked) → fill name → Join → call screen. */
 export async function joinFromLobby(p: Participant): Promise<void> {
   const { page } = p;
   await expect(page.locator(tid(TID.lobby))).toBeVisible();
+  await allowMediaIfAsked(page);
   await page.locator(tid(TID.nameInput)).fill(p.name);
   await page.locator(tid(TID.joinButton)).click();
   await expect(page.locator(tid(TID.callScreen))).toBeVisible();

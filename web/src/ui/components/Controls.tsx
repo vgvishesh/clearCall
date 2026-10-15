@@ -44,32 +44,28 @@ export function CtlButton(props: {
   );
 }
 
+/**
+ * Mic / camera toggles are never disabled: for a device that was never granted (joined listen-only or sound-only),
+ * turning it on makes the controller ask the browser (requestMedia) from this tap.
+ */
 export function MicButton({ c, local }: { c: CallController; local: LocalParticipant }) {
-  const on = local.micOn && local.micAvailable;
+  const on = local.micOn && local.micAvailable && local.mediaRequest === "done";
   return (
-    <CtlButton
-      testid={TID.micToggle}
-      label="Mute"
-      pressed={!on}
-      off={!on}
-      disabled={!local.micAvailable}
-      onClick={() => c.setMic(!local.micOn)}
-    >
+    <CtlButton testid={TID.micToggle} label="Mute" pressed={!on} off={!on} onClick={() => c.setMic(!on)}>
       {on ? <MicIcon /> : <MicOffIcon />}
     </CtlButton>
   );
 }
 
 export function CamButton({ c, local }: { c: CallController; local: LocalParticipant }) {
-  const on = local.camOn && local.camAvailable;
+  const on = local.camOn && local.camAvailable && local.mediaRequest === "done";
   return (
     <CtlButton
       testid={TID.camToggle}
       label="Camera off"
       pressed={!on}
       off={!on}
-      disabled={!local.camAvailable}
-      onClick={() => void c.setCam(!local.camOn)}
+      onClick={() => void c.setCam(!on)}
     >
       {on ? <CamIcon /> : <CamOffIcon />}
     </CtlButton>

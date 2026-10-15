@@ -7,13 +7,14 @@
  * full mesh in seconds. Each participant still has its own context (separate storage, own fake devices).
  */
 import type { Participant } from "../lib/call.ts";
-import { expectMediaFlowing, joinFromLobby, setupCall } from "../lib/call.ts";
+import { allowMediaIfAsked, expectMediaFlowing, joinFromLobby, setupCall } from "../lib/call.ts";
 import { expect, test } from "../lib/fixtures.ts";
 import { qaState, TID, tid, withQa } from "../lib/qa.ts";
 
 /** In the lobby: camera off (polled until the controller reflects it), then join. */
 async function joinCameraOff(p: Participant): Promise<void> {
   await expect(p.page.locator(tid(TID.lobby))).toBeVisible();
+  await allowMediaIfAsked(p.page);
   await expect.poll(async () => (await qaState(p.page)).local.stream !== null).toBe(true);
   await p.page.locator(`${tid(TID.lobby)} ${tid(TID.camToggle)}`).click();
   await expect.poll(async () => (await qaState(p.page)).local.camOn).toBe(false);

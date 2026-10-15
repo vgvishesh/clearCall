@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { deviceHelp, endedReason, errorCopy } from "./copy.ts";
+import {
+  askingCopy,
+  BLOCKED_STEPS,
+  boldParts,
+  deviceHelp,
+  endedReason,
+  errorCopy,
+  inAppCopy,
+  joinLabel,
+  primeCopy,
+  promptLook,
+  troubleCopy,
+} from "./copy.ts";
 import { describeDuration, displayName, formatDuration, initialOf } from "./format.ts";
 import { detectPlatform, isIosSafari } from "./platform.ts";
 
@@ -46,13 +58,51 @@ describe("copy", () => {
     expect(errorCopy("version-mismatch").actions).toEqual(["reload"]);
   });
 
-  it("device help is platform specific", () => {
-    expect(deviceHelp("permission-denied", false, true, "ios").steps).toMatch(/Settings › Safari/);
-    expect(deviceHelp("permission-denied", false, true, "android").steps).toMatch(/lock icon/);
-    expect(deviceHelp("permission-denied", false, false, "desktop").title).toBe(
-      "Camera and microphone are blocked",
+  it("device help is browser specific: three steps each, no jargon", () => {
+    expect(deviceHelp("permission-denied", false, true, "ios-safari").steps[0]!.text).toMatch(/aA/);
+    expect(deviceHelp("permission-denied", false, true, "ios-safari-standalone").steps[1]!.text).toMatch(
+      /Safari/,
     );
-    expect(deviceHelp("no-devices", false, true, "ios").title).toBe("No camera available");
+    expect(deviceHelp("permission-denied", false, true, "android-chrome").steps[0]!.text).toMatch(
+      /web address/,
+    );
+    expect(deviceHelp("permission-denied", false, false, "desktop-chrome").title).toBe(
+      "Your camera and mic are blocked",
+    );
+    expect(deviceHelp("permission-denied", false, true, "desktop-chrome").title).toBe(
+      "Your camera is blocked",
+    );
+    expect(deviceHelp("no-devices", false, true, "ios-safari").title).toBe("No camera found");
+    expect(deviceHelp("no-devices", false, true, "ios-safari").steps).toEqual([]);
+    for (const [cls, steps] of Object.entries(BLOCKED_STEPS)) {
+      expect(steps, cls).toHaveLength(3);
+      // Jargon only where it is the literal on-screen label (in **bold**).
+      for (const s of steps)
+        expect(s.text.replace(/\*\*[^*]+\*\*/g, ""), cls).not.toMatch(/permission|WebRTC|browser settings/i);
+    }
+  });
+
+  it("coach copy", () => {
+    const ios = { cls: "ios-safari", platform: "ios", iosVersion: 17, app: null } as const;
+    expect(primeCopy("ios").title).toMatch(/phone will ask/);
+    expect(primeCopy("desktop").text).toBe("Click **Allow**.");
+    expect(askingCopy(ios).title).toBe("Tap **Allow**");
+    expect(askingCopy(ios).text).toMatch(/middle/);
+    expect(troubleCopy({ ...ios, cls: "in-app-ios", app: "Instagram" }).text).toMatch(/Safari/);
+    expect(inAppCopy({ ...ios, cls: "in-app-ios", app: "Instagram" }, false).text).toMatch(/Open in Safari/);
+    expect(promptLook("samsung").where).toBe("bottom");
+    expect(boldParts("Tap **Allow**.")).toEqual([
+      { text: "Tap ", bold: false },
+      { text: "Allow", bold: true },
+      { text: ".", bold: false },
+    ]);
+  });
+
+  it("join label says what you join with", () => {
+    expect(joinLabel({ joining: false, cam: false, mic: false })).toBe("Join and just listen");
+    expect(joinLabel({ joining: false, cam: false, mic: true })).toBe("Join with sound only");
+    expect(joinLabel({ joining: false, cam: true, mic: true })).toBe("Join call");
+    expect(joinLabel({ joining: true, cam: true, mic: true })).toBe("Joining…");
   });
 
   it("ended reasons", () => {

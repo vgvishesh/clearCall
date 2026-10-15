@@ -7,6 +7,7 @@ import type { AudioElementLike } from "./audio-out.ts";
 import { type Clock, realClock } from "./clock.ts";
 import type { CodecLike, MediaCapabilitiesLike } from "./codecs.ts";
 import type { AudioContextLike, AudioTuning, MediaDevicesLike } from "./media.ts";
+import type { PermissionsLike } from "./permissions.ts";
 import { roomCipher, type SignalCipher, type WebSocketCtor } from "./signaling-client.ts";
 
 export interface CryptoDeps {
@@ -83,6 +84,8 @@ export interface CoreDeps {
   RTCPeerConnection: typeof RTCPeerConnection | undefined;
   MediaStream: typeof MediaStream | undefined;
   mediaDevices: MediaDevicesLike | undefined;
+  /** `navigator.permissions` (camera/microphone queries for the tap-gated prompt). Absent → always ask from a tap. */
+  permissions?: PermissionsLike | undefined;
   getCapabilities: (kind: "audio" | "video") => { codecs: CodecLike[] } | null;
   mediaCapabilities: MediaCapabilitiesLike | undefined;
   /** `navigator.userAgent` — only for engine-specific media workarounds (codecs.untrustedPowerEfficient). */
@@ -222,6 +225,10 @@ export function defaultDeps(): CoreDeps {
     RTCPeerConnection: g.RTCPeerConnection,
     MediaStream: g.MediaStream,
     mediaDevices: nav.mediaDevices,
+    permissions:
+      typeof nav.permissions?.query === "function"
+        ? (nav.permissions as unknown as PermissionsLike)
+        : undefined,
     getCapabilities: (kind) => {
       try {
         return (Receiver?.getCapabilities?.(kind) as { codecs: CodecLike[] } | null) ?? null;

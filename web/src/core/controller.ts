@@ -21,7 +21,8 @@ import {
 import { CPU_LEVEL_NAMES, type CpuLevel } from "./cpu-guard.ts";
 import { type CoreDeps, defaultDeps, type WakeLockLike } from "./deps.ts";
 import { createLog, errInfo, type LogSink, short } from "./log.ts";
-import { LocalMedia } from "./media.ts";
+import { type CaptureOptions, LocalMedia } from "./media.ts";
+import { browserClass, DevicePermissions, type MediaKind, type PermSnapshot } from "./permissions.ts";
 import { createQaHook, installQaHook } from "./qa.ts";
 import { type FatalSignalingCode, roomUrl, SignalingClient } from "./signaling-client.ts";
 import { StatsSampler } from "./stats.ts";
@@ -36,6 +37,7 @@ import type {
   CallPhase,
   CallState,
   LocalParticipant,
+  MediaRequest,
   QaHook,
   RemoteParticipant,
 } from "./types.ts";
@@ -55,6 +57,7 @@ const initialLocal = (name = ""): LocalParticipant => ({
   canSwitchCamera: false,
   camAvailable: true,
   micAvailable: true,
+  mediaRequest: "done",
 });
 
 const initialState = (name = ""): CallState => ({
@@ -100,8 +103,19 @@ class Controller implements CallController {
   private readonly L;
   private keys: RoomKeys | null = null;
   private media: LocalMedia | null = null;
-  /** Pending lobby acquisition; `join()` waits for it so the first offer carries real tracks. */
+  /** Pending camera/mic capture; `join()` waits for it so the first offer carries real tracks. */
   private mediaReady: Promise<void> | null = null;
+  /** `prepare()` in progress (a `requestMedia()` from the same tap waits for it). */
+  private preparing: Promise<void> | null = null;
+  private perms: DevicePermissions | null = null;
+  /**
+   * Kinds whose last request was refused → whether to turn them on when the browser later reports them granted
+   * (auto re-acquire after Settings; never a prompt).
+   */
+  private denied = new Map<MediaKind, boolean>();
+  private autoBusy = false;
+  private autoAgain = false;
+  private readonly browser: string;
   transport: MediaTransport | null = null;
   signaling: SignalingClient | null = null;
   peerId: string | null = null;
@@ -127,6 +141,7 @@ class Controller implements CallController {
     this.log = createLog({ now: deps.clock.now, consoleLevel: deps.flags.debug ? "debug" : "warn" });
     this.L = this.log.scope("controller");
     this.lobbyId = `lobby-${Math.floor(deps.random() * 1e9).toString(36)}`;
+    this.browser = browserClass(deps.userAgent);
     const stored = this.readName();
     this.state.value = initialState(stored);
     this.remoteAudio = new RemoteAudio({
@@ -284,7 +299,15 @@ class Controller implements CallController {
 
   // ── CallController ──
 
-  async prepare(opts: { link?: string; name?: string }): Promise<void> {
+  prepare(opts: { link?: string; name?: string }): Promise<void> {
+    const done: Promise<void> = this.prepareNow(opts).finally(() => {
+      if (this.preparing === done) this.preparing = null;
+    });
+    this.preparing = done;
+    return done;
+  }
+
+  private async prepareNow(opts: { link?: string; name?: string }): Promise<void> {
     if (this.disposed) return;
     this.teardown({ bye: true });
     const gen = ++this.generation;
@@ -320,8 +343,22 @@ class Controller implements CallController {
       this.L.warn("replaceState failed", errInfo(e));
     }
     const link = buildCallLink(d.location.origin, secret);
-    this.setPhase("lobby", { link, error: null });
 
+    // Ask the browser what it already decided about camera/mic, in parallel with the key derivation. The lobby
+    // appears once both are known, so it never flashes the wrong camera/mic step.
+    const perms = new DevicePermissions({
+      permissions: d.permissions,
+      clock: d.clock,
+      log: this.log.scope("media"),
+      timeoutMs: 500,
+      onChange: (kind, st) => {
+        if (this.perms !== perms) return;
+        this.L.info("permission changed", { kind, state: st });
+        if (st === "granted") void this.autoReacquire("change");
+      },
+    });
+    this.perms = perms;
+    const permQuery = perms.query();
     try {
       this.keys = await d.crypto.deriveRoomKeys(secret);
     } catch (e) {
@@ -329,6 +366,7 @@ class Controller implements CallController {
       this.setPhase("error", { error: { code: "unsupported", detail: `crypto:${errInfo(e).err}` } });
       return;
     }
+    const perm = await permQuery;
     if (gen !== this.generation) return;
 
     const forced = forcedVideoOrder(d.flags.vcodec); // lab bake-off only (`?vcodec=`)
@@ -351,6 +389,7 @@ class Controller implements CallController {
       ...(d.document ? { document: d.document } : {}),
       navigator: d.navigator,
       ...(d.flags.audio ? { audioTuning: d.flags.audio } : {}),
+      // Initial, late (a listen-only joiner taps Allow) and recovered tracks all reach every pair via replaceTrack.
       onTrack: (kind, track) => this.transport?.setLocalTrack(kind, track),
       onChange: () => {
         this.syncLocalFromMedia();
@@ -358,24 +397,158 @@ class Controller implements CallController {
       },
     });
     const media = this.media;
-    const acquiring = media.acquire({ mode: "voice", facing: "user" });
-    this.mediaReady = acquiring.then(
-      () => undefined,
-      () => undefined,
-    );
-    const err = await acquiring;
-    if (gen !== this.generation) {
-      media.stop();
+    this.L.info("permissions", { audio: perm.audio, video: perm.video, browser: this.browser });
+
+    if (perm.audio === "granted" && perm.video === "granted") {
+      // Already allowed (returning visitor, quality lab, E2E): no prompt can appear, so capture at once.
+      // mediaRequest stays "done" (no "tap Allow" hint); the preview fills in when the tracks arrive.
+      this.setPhase("lobby", { link, error: null });
+      await this.runCapture({ audio: true, video: true }, "granted");
+      return;
+    }
+    // Nothing captured yet: mic and camera are off until a tap gets them granted.
+    Object.assign(media.state, { micOn: false, camOn: false });
+    if (perm.audio === "denied" || perm.video === "denied") {
+      // Blocked before: getUserMedia would fail without a prompt — go straight to the help steps.
+      for (const k of ["audio", "video"] as const) if (perm[k] === "denied") this.denied.set(k, true);
+      Object.assign(media.state, {
+        micAvailable: perm.audio !== "denied",
+        camAvailable: perm.video !== "denied",
+      });
+      this.syncLocalFromMedia();
+      this.setPhase("lobby", { link, error: { code: "permission-denied", detail: "permissions-api" } });
+      this.setMediaRequest("done", "prepare-denied", { audio: perm.audio, video: perm.video });
       return;
     }
     this.syncLocalFromMedia();
-    if (err) this.patch({ error: err });
-    // Join may have raced ahead of the camera/mic (user tapped Join while getUserMedia was pending):
-    // hand the now-live tracks to every existing pair.
-    if (this.transport) {
-      this.transport.setLocalTrack("audio", media.state.audio ?? null);
-      this.transport.setLocalTrack("video", media.state.video ?? null);
-      this.transport.setLocalState(this.announce());
+    this.setPhase("lobby", { link, error: null });
+    this.setMediaRequest("not-asked", "prepare");
+  }
+
+  async requestMedia(opts: { video?: boolean } = {}): Promise<void> {
+    if (this.disposed) return;
+    // "Start a call" may call prepare() and requestMedia() back to back from one tap.
+    if (this.preparing) await this.preparing;
+    const media = this.media;
+    const s = this.state.value;
+    if (!media || !(s.phase === "lobby" || this.inCallish())) {
+      this.L.warn("requestMedia ignored", { phase: s.phase });
+      return;
+    }
+    if (s.local.mediaRequest === "asking") return; // the prompt is already up
+    const video = opts.video !== false;
+    const live = (t: MediaStreamTrack | null) => !!t && t.readyState !== "ended";
+    const want = { audio: !live(media.state.audio), video: video && !live(media.state.video) };
+    // Sound only: the user chose no camera — never bring it back by itself.
+    if (!video) this.denied.delete("video");
+    // In a call the tap was on one button: a late camera grant never unmutes the mic, and vice versa.
+    const turnOn = this.inCallish() ? { audio: !video, video: true } : { audio: true, video: true };
+    if (!want.audio && !want.video) {
+      this.setMediaRequest("done", "tap-nothing-to-do");
+      return;
+    }
+    await this.runCapture(want, "tap", turnOn);
+  }
+
+  /** The one place the controller starts getUserMedia (via LocalMedia.capture). */
+  private async runCapture(
+    want: { audio: boolean; video: boolean },
+    why: "tap" | "granted" | "auto",
+    turnOn?: CaptureOptions["turnOn"],
+  ): Promise<void> {
+    const media = this.media;
+    if (!media) return;
+    const gen = this.generation;
+    if (why === "tap") this.setMediaRequest("asking", why, { audio: want.audio, video: want.video });
+    const capture = media.capture({
+      ...want,
+      ...(turnOn ? { turnOn } : {}),
+      // After a refused combined request, probe a single device only if the browser says it is granted.
+      canRetrySeparately: async (k) => (await this.queryPerms())[k] === "granted",
+    });
+    const ready = capture.then(() => undefined);
+    this.mediaReady = ready;
+    const r = await capture;
+    if (this.mediaReady === ready) this.mediaReady = null;
+    if (gen !== this.generation || media !== this.media) return;
+    for (const k of ["audio", "video"] as const) {
+      if (!want[k]) continue;
+      if (r.denied.includes(k)) this.denied.set(k, turnOn?.[k] ?? true);
+      else this.denied.delete(k);
+    }
+    this.syncLocalFromMedia();
+    if (this.state.value.phase === "lobby") {
+      // A device still blocked from before (not part of this capture) keeps the blocked help on screen.
+      const still = [...this.denied.keys()].filter((k) => !want[k]);
+      this.patch({
+        error:
+          r.error ??
+          (still.length
+            ? { code: "permission-denied", detail: still.map((k) => `${k}:denied`).join(",") }
+            : null),
+      });
+    }
+    this.setMediaRequest("done", why, {
+      audio: r.audio,
+      video: r.video,
+      ...(r.error ? { code: r.error.code, detail: r.error.detail } : {}),
+    });
+    this.transport?.setLocalState(this.announce());
+    // iOS: the first capture switches the audio session to play-and-record, which can pause remote <audio>.
+    if (r.audio && this.inCallish()) {
+      this.L.info("mic granted in call: re-playing remote audio");
+      void this.remoteAudio.resume();
+    }
+  }
+
+  private queryPerms(): Promise<PermSnapshot> {
+    return this.perms?.query() ?? Promise.resolve({ audio: "unknown", video: "unknown" });
+  }
+
+  /** QA log line on every request step (browser class only — never the UA string or the link). */
+  private setMediaRequest(to: MediaRequest, why: string, data: Record<string, unknown> = {}) {
+    const from = this.state.value.local.mediaRequest;
+    this.L.info("mediaRequest", { from, to, why, browser: this.browser, ...data });
+    if (from !== to) this.patchLocal({ mediaRequest: to });
+  }
+
+  /**
+   * After a refusal, re-acquire by itself ONLY when the Permissions API now says "granted" (the user changed it in
+   * Settings / site settings). Never a prompt; no Permissions API → nothing (the user taps "Try again").
+   */
+  private async autoReacquire(why: "change" | "visible"): Promise<void> {
+    if (this.autoBusy) {
+      this.autoAgain = true;
+      return;
+    }
+    const perms = this.perms;
+    if (!perms?.supported || !this.media || this.denied.size === 0) return;
+    if (!(this.state.value.phase === "lobby" || this.inCallish())) return;
+    if (this.state.value.local.mediaRequest !== "done") return;
+    this.autoBusy = true;
+    try {
+      const gen = this.generation;
+      const perm = await perms.query();
+      if (gen !== this.generation || this.state.value.local.mediaRequest !== "done") return;
+      const kinds = [...this.denied.keys()].filter((k) => perm[k] === "granted");
+      if (!kinds.length) return;
+      const lobby = this.state.value.phase === "lobby";
+      const turnOn = {
+        audio: lobby || (this.denied.get("audio") ?? false),
+        video: lobby || (this.denied.get("video") ?? false),
+      };
+      this.L.info("permission granted: re-acquiring", { why, kinds });
+      await this.runCapture(
+        { audio: kinds.includes("audio"), video: kinds.includes("video") },
+        "auto",
+        turnOn,
+      );
+    } finally {
+      this.autoBusy = false;
+    }
+    if (this.autoAgain) {
+      this.autoAgain = false;
+      await this.autoReacquire(why);
     }
   }
 
@@ -392,7 +565,8 @@ class Controller implements CallController {
     void this.media?.resumeAudioContext();
     this.requestWakeLock();
 
-    // Let a pending lobby getUserMedia finish first (bounded: a permission prompt may sit open).
+    // Let a pending getUserMedia finish first (bounded: a permission prompt may sit open). Nothing pending (camera
+    // and mic never asked for) → join listen-only at once; a later grant reaches every pair via replaceTrack.
     if (this.mediaReady) {
       const pending = this.mediaReady;
       const waited = await Promise.race([
@@ -548,12 +722,22 @@ class Controller implements CallController {
   }
 
   setMic(on: boolean): void {
+    if (on && this.media && !this.media.state.audio) {
+      // Never granted (listen-only) or lost: the tap asks for the mic only.
+      void this.requestMedia({ video: false });
+      return;
+    }
     this.media?.setMic(on);
     this.syncLocalFromMedia();
     this.transport?.setLocalState(this.announce());
   }
 
   async setCam(on: boolean): Promise<void> {
+    if (on && this.media && !this.media.state.video && !this.media.everHad("video")) {
+      // Never granted: the tap asks for the camera (plus the mic if it was never asked for — it stays muted).
+      await this.requestMedia({ video: true });
+      return;
+    }
     await this.media?.setCam(on);
     this.syncLocalFromMedia();
     this.transport?.setLocalState(this.announce());
@@ -649,6 +833,11 @@ class Controller implements CallController {
       else sig?.close();
       this.media?.stop();
       this.media = null;
+      this.mediaReady = null;
+      this.perms?.close();
+      this.perms = null;
+      this.denied.clear();
+      this.autoAgain = false;
       this.remoteAudio.close();
       this.speaker.reset();
       this.releaseWakeLock();
@@ -693,6 +882,8 @@ class Controller implements CallController {
       this.wakeLock = null;
       this.requestWakeLock();
     }
+    // Back from Settings after blocking camera/mic: re-acquire if the browser now reports it granted.
+    if (!hidden && this.denied.size) void this.autoReacquire("visible");
   };
 
   private onPageHide = () => {

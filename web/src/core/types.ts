@@ -56,6 +56,17 @@ export interface CallError {
 export type PeerConnectionStatus = "connecting" | "connected" | "reconnecting" | "failed";
 export type ConnectionQuality = "good" | "fair" | "poor" | "unknown";
 
+/**
+ * Camera/mic request progress (permission coach). The browser prompt is only shown after a tap, never on page load:
+ * - "not-asked": no getUserMedia yet. The lobby explains what's coming and offers "Turn on camera & mic"
+ *   (`requestMedia()`). `prepare()` skips this and acquires straight away when the Permissions API already reports
+ *   camera AND microphone as "granted"; when it reports either as "denied", `prepare()` goes straight to "done" with
+ *   error permission-denied (no getUserMedia call). Joining from "not-asked" joins listen-only.
+ * - "asking": getUserMedia pending — the browser prompt is probably on screen ("tap Allow").
+ * - "done": finished; the outcome is in camAvailable / micAvailable / CallState.error (permission-denied | no-devices).
+ */
+export type MediaRequest = "not-asked" | "asking" | "done";
+
 export interface LocalParticipant {
   name: string;
   micOn: boolean;
@@ -73,6 +84,8 @@ export interface LocalParticipant {
   camAvailable: boolean;
   /** False when the microphone is missing or denied (joining is still allowed, muted). */
   micAvailable: boolean;
+  /** Where the camera/mic request stands (see MediaRequest). camAvailable/micAvailable mean nothing until "done". */
+  mediaRequest: MediaRequest;
 }
 
 export interface RemoteParticipant {
@@ -125,13 +138,24 @@ export interface CallController {
   readonly state: ReadonlySignal<CallState>;
 
   /**
-   * Go to the lobby: parse/create the link and acquire camera+mic for preview.
+   * Go to the lobby: parse/create the link. Camera+mic are acquired only if the browser already granted both
+   * (Permissions API); otherwise `local.mediaRequest` = "not-asked" and the UI calls `requestMedia()` from a tap.
    * `link` = the current URL or a pasted link (join), or undefined (start a new call: generates a secret).
    * Always `history.replaceState` to `/c#<secret>` so reload/share use the canonical URL.
    * Must be called from a user gesture on iOS for reliable permission prompts.
    * The factory `createCallController()` also installs telemetry and (with ?qa=1) `window.__clearcall`.
    */
   prepare(opts: { link?: string; name?: string }): Promise<void>;
+
+  /**
+   * From a user gesture: ask for the mic, plus the camera unless `video: false` ("Join with sound only").
+   * First time, or "Try again" after blocked / missing. mediaRequest goes "asking" → "done"; a call while already
+   * "asking" is a no-op. In a call, tapping mic or cam while that device was never granted calls
+   * `requestMedia({ video: kind === "video" })`; a later camera grant never turns the mic on and vice versa.
+   * After a dismissed/blocked prompt the controller never re-prompts by itself: it re-acquires automatically only
+   * when the Permissions API reports "granted" (change event, or on becoming visible again after Settings).
+   */
+  requestMedia(opts?: { video?: boolean }): Promise<void>;
 
   /** Join the room from the lobby. Must be called from a user gesture (unlocks audio playback on iOS). */
   join(name: string): Promise<void>;

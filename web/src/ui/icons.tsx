@@ -1,9 +1,13 @@
 /** Inline SVG icons (24×24, 1.8 stroke, currentColor). Decorative: always aria-hidden; the button carries the label. */
 import type { JSX } from "preact";
 
-type IconProps = { size?: number; class?: string };
+export type IconProps = { size?: number; class?: string };
 
-function Svg({ size = 24, class: cls, children }: IconProps & { children: JSX.Element | JSX.Element[] }) {
+export function Svg({
+  size = 24,
+  class: cls,
+  children,
+}: IconProps & { children: JSX.Element | JSX.Element[] }) {
   return (
     <svg
       class={cls ? `icon ${cls}` : "icon"}
@@ -163,6 +167,26 @@ export const IosShareIcon = (p: IconProps) => (
   <Svg {...p} size={p.size ?? 18}>
     <path d="M12 14V3.5M8.5 7 12 3.5 15.5 7" />
     <path d="M8 10H6.5A1.5 1.5 0 0 0 5 11.5v8A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-8a1.5 1.5 0 0 0-1.5-1.5H16" />
+  </Svg>
+);
+
+export const CopyIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="8.5" y="8.5" width="12" height="12" rx="2.5" />
+    <path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5" />
+  </Svg>
+);
+
+export const ExternalIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 4h6v6M20 4l-9 9" />
+    <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+  </Svg>
+);
+
+export const ArrowUpIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 20V5M6 11l6-6 6 6" />
   </Svg>
 );
 

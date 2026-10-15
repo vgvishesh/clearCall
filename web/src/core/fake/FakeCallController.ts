@@ -18,6 +18,10 @@ export interface FakeOptions {
   /** Animate the local mic level (default true). */
   animateLevels?: boolean;
   joinDelayMs?: number;
+  /** requestMedia(): how long the fake browser prompt stays "asking" (default 400 ms). */
+  askDelayMs?: number;
+  /** requestMedia(): the fake user blocks access. */
+  denyMedia?: boolean;
 }
 
 export interface RemoteSpec {
@@ -46,6 +50,7 @@ export const DEFAULT_LOCAL: LocalParticipant = {
   canSwitchCamera: false,
   camAvailable: true,
   micAvailable: true,
+  mediaRequest: "done",
 };
 
 export function emptyState(): CallState {
@@ -80,7 +85,13 @@ export class FakeCallController implements CallController {
     const init = opts.initial ?? {};
     this.state = signal<CallState>({ ...base, ...init, local: { ...base.local, ...init.local } });
     const s = this.state.peek();
-    if (s.phase !== "idle" && s.local.camOn && s.local.camAvailable && !s.local.stream) {
+    if (
+      s.phase !== "idle" &&
+      s.local.mediaRequest === "done" &&
+      s.local.camOn &&
+      s.local.camAvailable &&
+      !s.local.stream
+    ) {
       this.patchLocal({ stream: this.feed("self", { hue: 205, portrait: isPortraitDevice() }) });
     }
     if (s.participants.length) this.attachRemoteFeeds(s.participants);
@@ -117,10 +128,54 @@ export class FakeCallController implements CallController {
         ...s.local,
         name: opts.name ?? s.local.name,
         camOn: camOk && (s.phase === "ended" || s.phase === "error" ? true : s.local.camOn),
-        stream: camOk
-          ? (s.local.stream ?? this.feed("self", { hue: 205, portrait: isPortraitDevice() }))
-          : null,
+        stream:
+          camOk && s.local.mediaRequest === "done"
+            ? (s.local.stream ?? this.feed("self", { hue: 205, portrait: isPortraitDevice() }))
+            : null,
       },
+    });
+  }
+
+  /** Fake browser prompt: "asking" for `askDelayMs`, then granted (or the `denyMedia` outcome). */
+  async requestMedia(opts: { video?: boolean } = {}): Promise<void> {
+    this.log("requestMedia", [opts]);
+    await this.acquire(opts.video !== false, null);
+  }
+
+  /**
+   * `from` = the in-call toggle that triggered the request: a late camera grant never turns the mic on and vice
+   * versa (the other device keeps its on/off state).
+   */
+  private async acquire(video: boolean, from: "mic" | "cam" | null): Promise<void> {
+    const prev = this.state.peek().local;
+    if (prev.mediaRequest === "asking") return;
+    const hadCam = prev.mediaRequest === "done" && prev.camAvailable;
+    const hadMic = prev.mediaRequest === "done" && prev.micAvailable;
+    this.patchLocal({ mediaRequest: "asking" });
+    await delay(this.opts.askDelayMs ?? 400);
+    const before = this.state.peek().local;
+    if (this.opts.denyMedia) {
+      this.set({ error: { code: "permission-denied" } });
+      this.patchLocal({
+        mediaRequest: "done",
+        camOn: false,
+        micOn: false,
+        camAvailable: false,
+        micAvailable: false,
+        stream: null,
+      });
+      return;
+    }
+    this.set({ error: null });
+    const camAvailable = video || (from !== null && hadCam);
+    const camOn = from === "mic" ? before.camOn && hadCam : video;
+    this.patchLocal({
+      mediaRequest: "done",
+      camAvailable,
+      micAvailable: true,
+      camOn,
+      micOn: from === "cam" ? before.micOn && hadMic : true,
+      stream: camOn ? this.feed("self", { hue: 205, portrait: isPortraitDevice() }) : before.stream,
     });
   }
 
@@ -157,13 +212,19 @@ export class FakeCallController implements CallController {
 
   setMic(on: boolean): void {
     this.log("setMic", [on]);
-    if (!this.state.peek().local.micAvailable) return;
+    const l = this.state.peek().local;
+    if (on && (l.mediaRequest !== "done" || !l.micAvailable)) {
+      void this.acquire(false, "mic");
+      return;
+    }
+    if (!l.micAvailable) return;
     this.patchLocal({ micOn: on, audioLevel: on ? this.state.peek().local.audioLevel : 0, speaking: false });
   }
 
   async setCam(on: boolean): Promise<void> {
     this.log("setCam", [on]);
     const l = this.state.peek().local;
+    if (on && (l.mediaRequest !== "done" || !l.camAvailable)) return this.acquire(true, "cam");
     if (!l.camAvailable) return;
     if (!on) {
       this.feeds.get("self")?.stop();

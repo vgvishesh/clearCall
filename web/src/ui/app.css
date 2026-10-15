@@ -1062,6 +1062,279 @@ p {
   }
 }
 
+/* ---------- Permission coach (lobby Get ready / Tap Allow / blocked steps / in-app; unsupported screen) ----------
+   Senior-friendly: ≥ 18 px text, ≥ 56 px primary, one primary + at most one text link. */
+.coach {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  padding: var(--s-5) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-l);
+  background: var(--surface-1);
+  text-align: center;
+  font-size: var(--t-coach);
+  line-height: 1.35;
+}
+.coach__art {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+}
+.coach__title {
+  max-width: 24ch;
+  font-size: var(--t-coach-title);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.coach--big .coach__title {
+  font-size: var(--t-2xl);
+}
+.coach__title strong,
+.coach__text strong {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+.coach__text {
+  max-width: 30ch;
+  color: var(--text-muted);
+}
+.coach__text strong {
+  color: var(--text);
+}
+.coach__note {
+  color: var(--text-muted);
+}
+.coach__actions {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  margin-top: var(--s-1);
+}
+.btn--coach {
+  min-height: var(--btn-coach-h);
+  font-size: var(--t-coach);
+  text-decoration: none;
+}
+.btn--link {
+  min-height: var(--tap);
+  padding: 0 var(--s-4);
+  background: none;
+  color: var(--accent-text);
+  font-size: var(--t-coach);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.coach__steps {
+  width: 100%;
+  max-width: 440px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  text-align: left;
+}
+.coach__step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 60px;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-s);
+  background: var(--surface-2);
+  line-height: 1.3;
+}
+.coach__step strong {
+  font-weight: 700;
+}
+.coach__step-num {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+.coach__step-text {
+  flex: 1;
+  min-width: 0;
+}
+.coach__step-glyph {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-s);
+  background: var(--surface-1);
+  color: var(--text);
+}
+.coach-glyph__text {
+  fill: currentColor;
+  font-family: var(--font);
+  font-weight: 600;
+}
+.coach-glyph__switch {
+  fill: var(--accent);
+}
+.coach-glyph__knob {
+  fill: var(--on-accent);
+}
+
+/* The browser question, drawn. */
+.coach-art {
+  display: block;
+  width: min(100%, 280px);
+  height: auto;
+  max-height: 26dvh;
+}
+.coach-art__dialog {
+  fill: var(--surface-2);
+  stroke: var(--border);
+}
+.coach-art__line {
+  fill: var(--text-muted);
+  opacity: 0.45;
+}
+.coach-art__line--soft {
+  opacity: 0.28;
+}
+.coach-art__button {
+  fill: var(--surface-3);
+}
+.coach-art__button-text {
+  fill: var(--text-muted);
+  font: 600 12.5px var(--font);
+}
+.coach-art__allow {
+  fill: var(--accent);
+}
+.coach-art__allow-text {
+  fill: var(--on-accent);
+  font: 700 13px var(--font);
+}
+.coach-art__ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0.6;
+}
+.coach-art__tap-halo {
+  fill: var(--text);
+  opacity: 0.22;
+}
+.coach-art__tap-dot {
+  fill: var(--text);
+}
+.coach__arrow {
+  color: var(--accent);
+  animation: coach-nudge 1.4s ease-in-out infinite;
+}
+.coach__arrow--top-left {
+  rotate: -45deg;
+}
+.coach__arrow--bottom {
+  rotate: 180deg;
+}
+@keyframes coach-nudge {
+  50% {
+    transform: translateY(-8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coach__arrow {
+    animation: none;
+  }
+}
+
+/* Lobby while coaching: the coach takes the preview's place; Join is secondary and Share a round button beside it. */
+.lobby.is-coaching {
+  gap: var(--s-3);
+}
+.lobby.is-coaching .lobby__actions {
+  flex-direction: row;
+}
+.lobby.is-coaching .lobby__join {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.lobby.is-coaching .lobby__share {
+  flex: none;
+  width: var(--btn-h);
+  padding: 0;
+}
+.lobby.is-coaching .lobby__share-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+@media (max-width: 899px) {
+  .lobby.is-coaching .lobby__title {
+    display: none;
+  }
+}
+/* Short phones (iPhone SE with Safari bars ≈ 550 px): tighter card, smaller picture, steps stay readable. */
+@media (max-height: 700px) {
+  .coach {
+    gap: var(--s-2);
+    padding: var(--s-4) var(--s-3);
+  }
+  .coach-art {
+    max-height: 19dvh;
+  }
+  .coach__title {
+    font-size: var(--t-coach-title-s);
+  }
+  .coach--big .coach__title {
+    font-size: var(--t-xl);
+  }
+  .coach__step {
+    min-height: 52px;
+    padding: 6px var(--s-2);
+  }
+  .coach__step-glyph {
+    width: 36px;
+    height: 36px;
+  }
+}
+/* iPhone SE-class visible height (≈ 553 px in Safari): smaller pictures so the Join row stays on screen. */
+@media (max-height: 600px) {
+  .coach-art {
+    max-height: 10dvh;
+  }
+}
+@media (min-width: 900px) {
+  .lobby.is-coaching .coach {
+    flex: 0 1 640px;
+    align-self: stretch;
+    max-height: 640px;
+    margin: auto 0;
+    padding: var(--s-7);
+  }
+}
+.center-screen__text--large {
+  font-size: var(--t-coach);
+}
+
 /* ---------- Ended / Error ---------- */
 .center-screen {
   max-width: var(--content-max);

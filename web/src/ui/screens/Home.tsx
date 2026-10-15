@@ -13,6 +13,9 @@ export function Home() {
     setBusy(true);
     try {
       await c.prepare({});
+      // Same tap: the caller goes straight to the browser's question (one tap, one prompt).
+      const s = c.state.peek();
+      if (s.phase === "lobby" && s.local.mediaRequest === "not-asked") void c.requestMedia();
     } finally {
       setBusy(false);
     }

@@ -54,6 +54,22 @@ export interface ScreenScenario {
 const HOME = [TID.startCall, TID.joinLinkInput, TID.joinLinkSubmit];
 const LOBBY = [TID.lobby, TID.lobbyPreview, TID.nameInput, TID.joinButton, TID.micLevel, TID.shareLink];
 const LOBBY_FULL = [...LOBBY, TID.micToggle, TID.camToggle, TID.musicModeToggle];
+/** Lobby while the permission coach shows (no preview yet). */
+const COACH = [TID.lobby, TID.nameInput, TID.joinButton, TID.shareLink];
+const BLOCKED_BROWSERS = [
+  "ios-safari",
+  "ios-safari-standalone",
+  "ios-chrome",
+  "ios-other",
+  "android-chrome",
+  "samsung",
+  "miui",
+  "firefox-android",
+  "desktop-chrome",
+  "desktop-edge",
+  "desktop-safari",
+  "desktop-firefox",
+];
 const CALL = [
   TID.callScreen,
   TID.selfTile,
@@ -71,7 +87,26 @@ export const SCENARIOS: ScreenScenario[] = [
   { name: "home-light", scenario: "home", colorScheme: "light", required: HOME },
   { name: "lobby", required: LOBBY_FULL, requiredMobile: [TID.flipCamera] },
   { name: "lobby-light", scenario: "lobby", colorScheme: "light", required: LOBBY_FULL },
-  { name: "lobby-denied", required: [...LOBBY, TID.retryMedia, TID.micToggle, TID.camToggle] },
+  // Blocked camera+mic now shows the permission coach in place of the preview (permission-coach plan).
+  { name: "lobby-denied", required: [...COACH, TID.permissionHelp, TID.retryMedia] },
+  { name: "lobby-ask", required: [...COACH, TID.permissionPrime, TID.allowMedia, TID.joinSoundOnly] },
+  {
+    name: "lobby-ask-light",
+    scenario: "lobby-ask",
+    colorScheme: "light",
+    required: [...COACH, TID.allowMedia],
+  },
+  { name: "lobby-asking", required: [...COACH, TID.permissionPrime] },
+  { name: "lobby-asking-trouble", required: [...COACH, TID.permissionPrime], requiredMobile: [TID.copyLink] },
+  ...BLOCKED_BROWSERS.map(
+    (b): ScreenScenario => ({
+      name: `lobby-blocked-${b}`,
+      required: [...COACH, TID.permissionHelp, TID.retryMedia],
+    }),
+  ),
+  { name: "lobby-blocked-ios-reload", required: [...COACH, TID.permissionHelp, TID.retryMedia] },
+  { name: "lobby-inapp-android", required: [...COACH, TID.inAppNotice, TID.openInBrowser, TID.copyLink] },
+  { name: "lobby-inapp-ios", required: [...COACH, TID.inAppNotice, TID.openInBrowser, TID.copyLink] },
   { name: "lobby-nocam", required: [...LOBBY, TID.micToggle, TID.retryMedia] },
   { name: "lobby-music", required: LOBBY_FULL },
   ...Array.from({ length: 10 }, (_, i): ScreenScenario => {
@@ -94,6 +129,7 @@ export const SCENARIOS: ScreenScenario[] = [
   { name: "error-room-full", required: [...ERROR, TID.errorAction, TID.newCallButton] },
   { name: "error-invalid-link", required: [...ERROR, TID.newCallButton] },
   { name: "error-unsupported", required: ERROR },
+  { name: "error-unsupported-inapp", required: [...ERROR, TID.openInBrowser, TID.copyLink] },
   { name: "error-signaling", required: [...ERROR, TID.errorAction] },
   { name: "error-version", required: [...ERROR, TID.errorAction] },
 ];

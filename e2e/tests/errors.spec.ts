@@ -1,7 +1,9 @@
 /**
  * Error states: malformed links and camera/mic permission denied.
  */
+import { allowMediaIfAsked } from "../lib/call.ts";
 import { expect, test } from "../lib/fixtures.ts";
+import { emulateUnaskedPermissions } from "../lib/permissions.ts";
 import { qaState, TID, tid, withQa } from "../lib/qa.ts";
 
 test.describe("error states", () => {
@@ -31,10 +33,15 @@ test.describe("error states", () => {
     // chromium-headless-shell has no permission-prompt UI and rejects with NotSupportedError instead (→ no-devices).
     const browser = await call.launchBrowser(["--use-fake-device-for-media-stream"], { channel: "chromium" });
     const p = await call.participant("Nia", { browser, contextOptions: { permissions: [] } });
+    // Headless Chromium reads never-asked camera/mic as "denied" (the app would skip straight to the blocked help
+    // without calling getUserMedia); read them as "prompt" like a real browser so the tap really asks and is refused.
+    await emulateUnaskedPermissions(p.context);
 
     await p.page.goto(withQa("/"));
     await p.page.locator(tid(TID.startCall)).click();
     await expect(p.page.locator(tid(TID.lobby))).toBeVisible();
+    // Permission coach: no prompt without a tap — tap "Turn on camera & mic" if the Get ready step shows.
+    await allowMediaIfAsked(p.page);
     await expect
       .poll(async () => (await qaState(p.page)).error?.code, { timeout: 10_000 })
       .toBe("permission-denied");

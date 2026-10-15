@@ -19,7 +19,21 @@ export const TID = {
   joinButton: "join-button",
   lobbyPreview: "lobby-preview",
   micLevel: "mic-level",
-  /** Lobby: "Try again" after camera/mic were blocked or missing. */
+  /** Lobby "Get ready" step (mediaRequest not-asked/asking): explains the browser prompt before it appears. */
+  permissionPrime: "permission-prime",
+  /** Lobby: "Turn on camera & mic" — calls requestMedia() from a tap. */
+  allowMedia: "allow-media",
+  /** Lobby "Get ready" secondary action: requestMedia({video:false}) — mic only. (Listen-only = joinButton.) */
+  joinSoundOnly: "join-sound-only",
+  /** Lobby: step-by-step help for the user's browser after camera/mic were blocked. */
+  permissionHelp: "permission-help",
+  /** Lobby notice when the page runs inside another app's browser (in-app / WebView). */
+  inAppNotice: "in-app-notice",
+  /** "Open in Chrome / Safari" — used both in the lobby in-app notice and on the `unsupported` error screen. */
+  openInBrowser: "open-in-browser",
+  /** "Copy link" next to openInBrowser (always shown with it). */
+  copyLink: "copy-link",
+  /** Lobby: "Try again" / "I've done it" after camera/mic were blocked or missing. */
   retryMedia: "retry-media",
   // Call
   callScreen: "call-screen",

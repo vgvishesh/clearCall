@@ -4,6 +4,15 @@ import { FakeCallController, type FakeOptions } from "../core/fake/FakeCallContr
 import { buildScenario } from "../core/fake/scenarios.ts";
 import { TID } from "../core/testids.ts";
 import { App, isCallLink } from "./App.tsx";
+import { unsupportedLink } from "./screens/ErrorScreen.tsx";
+
+const LINK = "https://clearcall.app/c#Qm9uam91ciBjbGVhcmNhbGw";
+const SAFARI_IOS =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const CHROME_ANDROID =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+const IG_ANDROID =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 7 Build/UQ1A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0 Mobile Safari/537.36 Instagram 337.0";
 
 afterEach(() => {
   cleanup();
@@ -87,10 +96,13 @@ describe("App", () => {
     expect(isCallLink({ pathname: "/c" })).toBe(true);
   });
 
-  it("lobby without a camera offers Join without camera", () => {
-    render(<App controller={scenario("lobby-nocam")} />);
-    expect(screen.getByTestId(TID.joinButton).textContent).toBe("Join without camera");
+  it("lobby without a camera offers Join with sound only and Try again asks again", () => {
+    const c = scenario("lobby-nocam");
+    render(<App controller={c} />);
+    expect(screen.getByTestId(TID.joinButton).textContent).toBe("Join with sound only");
     expect(screen.getByRole("alert").textContent).toMatch(/camera/i);
+    fireEvent.click(screen.getByTestId(TID.retryMedia));
+    expect(c.calls.at(-1)?.method).toBe("requestMedia");
   });
 
   it("music mode shows the headphones hint", () => {
@@ -155,19 +167,169 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("blocked lobby retries media with the same link and name", () => {
+  it("blocked lobby shows three steps and “I’ve done it” asks again (no new link)", () => {
     const c = scenario("lobby-denied");
     render(<App controller={c} />);
+    const help = screen.getByTestId(TID.permissionHelp);
+    expect(help.querySelectorAll("li")).toHaveLength(3);
+    expect(screen.getByTestId(TID.joinButton).textContent).toBe("Join and just listen");
     fireEvent.click(screen.getByTestId(TID.retryMedia));
-    expect(c.calls.at(-1)?.method).toBe("prepare");
+    expect(c.calls.at(-1)).toEqual({ method: "requestMedia", args: [{}] });
+    expect(c.calls.some((x) => x.method === "prepare")).toBe(false);
   });
 
-  it("blocked lobby keeps a full preview card with an avatar and the toggles", () => {
-    render(<App controller={scenario("lobby-denied")} />);
-    const preview = screen.getByTestId(TID.lobbyPreview);
-    expect(preview.querySelector(".avatar")).toBeTruthy();
-    expect(preview.querySelector(`[data-testid="${TID.micToggle}"]`)).toBeTruthy();
-    expect(preview.querySelector(`[data-testid="${TID.camToggle}"]`)).toBeTruthy();
+  it.each([
+    ["ios-safari", /aA/],
+    ["ios-safari-standalone", /Settings/],
+    ["android-chrome", /icon left of the web address/],
+    ["samsung", /lock/],
+    ["desktop-firefox", /crossed-out camera/],
+  ])("blocked help is written for %s", (cls, first) => {
+    render(
+      <App
+        controller={scenario(`lobby-blocked-${cls}`)}
+        hints={buildScenario(`lobby-blocked-${cls}`).hints}
+      />,
+    );
+    const steps = screen.getByTestId(TID.permissionHelp).querySelectorAll("li");
+    expect(steps[0]!.textContent).toMatch(first);
+  });
+
+  it("iOS: still blocked after “I’ve done it” → Reload page", () => {
+    const s = buildScenario("lobby-blocked-ios-reload");
+    render(<App controller={fake(s.options)} hints={s.hints} />);
+    expect(screen.getByTestId(TID.retryMedia).textContent).toBe("Reload page");
+  });
+
+  it("iOS: a retry that is still blocked turns the button into Reload page", async () => {
+    const s = buildScenario("lobby-blocked-ios-safari");
+    const c = fake({ ...s.options, askDelayMs: 0 });
+    render(<App controller={c} hints={s.hints} />);
+    fireEvent.click(screen.getByTestId(TID.retryMedia));
+    await waitFor(() => expect(screen.getByTestId(TID.retryMedia).textContent).toBe("Reload page"));
+  });
+
+  it("Get ready: no prompt until a tap; Turn on camera & mic → asking → preview", async () => {
+    const c = fake({ ...buildScenario("lobby-ask").options, askDelayMs: 0 });
+    render(
+      <App
+        controller={c}
+        hints={{ browser: { ua: "Mozilla/5.0 (Windows NT 10.0) Chrome/126.0 Safari/537.36" } }}
+      />,
+    );
+    expect(screen.getByTestId(TID.permissionPrime).textContent).toMatch(/will ask to use the camera/);
+    expect(screen.queryByTestId(TID.lobbyPreview)).toBeNull();
+    expect(c.calls.some((x) => x.method === "requestMedia")).toBe(false);
+    expect(screen.getByTestId(TID.joinButton).textContent).toBe("Join and just listen");
+    fireEvent.click(screen.getByTestId(TID.allowMedia));
+    expect(c.calls.at(-1)).toEqual({ method: "requestMedia", args: [{}] });
+    await screen.findByTestId(TID.lobbyPreview);
+    expect(screen.queryByTestId(TID.permissionPrime)).toBeNull();
+    expect(screen.getByTestId(TID.joinButton).textContent).toBe("Join call");
+  });
+
+  it("Get ready: Join with sound only asks for the mic only", async () => {
+    const c = fake({ ...buildScenario("lobby-ask").options, askDelayMs: 0 });
+    render(<App controller={c} />);
+    fireEvent.click(screen.getByTestId(TID.joinSoundOnly));
+    expect(c.calls.at(-1)).toEqual({ method: "requestMedia", args: [{ video: false }] });
+    await waitFor(() => expect(screen.getByTestId(TID.joinButton).textContent).toBe("Join with sound only"));
+  });
+
+  it("asking: Tap Allow, then after a while offers another browser", async () => {
+    const s = buildScenario("lobby-asking");
+    render(<App controller={fake(s.options)} hints={{ askTroubleMs: 30, browser: { ua: IG_ANDROID } }} />);
+    // "Try here anyway" in an app's browser: the Tap Allow step, not the in-app card.
+    expect(screen.queryByTestId(TID.inAppNotice)).toBeNull();
+    expect(screen.getByTestId(TID.permissionPrime).textContent).toMatch(/Tap Allow/);
+    cleanup();
+    render(
+      <App
+        controller={fake(s.options)}
+        hints={{ askTroubleMs: 30, browser: { ua: SAFARI_IOS, touchPoints: 5, standalone: false } }}
+      />,
+    );
+    expect(screen.getByTestId(TID.permissionPrime).textContent).toMatch(/Tap Allow/);
+    await waitFor(() => expect(screen.getByTestId(TID.openInBrowser)).toBeTruthy());
+    expect(screen.getByTestId(TID.openInBrowser).getAttribute("href")).toMatch(/^x-safari-https:\/\//);
+    expect(screen.getByTestId(TID.copyLink)).toBeTruthy();
+  });
+
+  it("in-app Android: Open in Chrome keeps the secret in the fragment, Copy link beside it", () => {
+    const s = buildScenario("lobby-inapp-android");
+    render(<App controller={fake(s.options)} hints={s.hints} />);
+    const notice = screen.getByTestId(TID.inAppNotice);
+    expect(notice.textContent).toMatch(/Open this call in Chrome/);
+    const href = screen.getByTestId(TID.openInBrowser).getAttribute("href")!;
+    expect(href).toMatch(
+      /^intent:\/\/clearcall\.app\/c#Qm9uam91ciBjbGVhcmNhbGw#Intent;.*package=com\.android\.chrome;/,
+    );
+    expect(screen.getByTestId(TID.copyLink)).toBeTruthy();
+    // Secondary "Try here anyway" (some app browsers can call); never the blocked-help steps.
+    expect(screen.getByTestId(TID.allowMedia).textContent).toBe("Try here anyway");
+    expect(screen.queryByTestId(TID.permissionHelp)).toBeNull();
+  });
+
+  it("in-app iOS: x-safari link on iOS 17, Copy link primary on iOS 16", () => {
+    const s = buildScenario("lobby-inapp-ios");
+    render(<App controller={fake(s.options)} hints={s.hints} />);
+    expect(screen.getByTestId(TID.openInBrowser).getAttribute("href")).toBe(`x-safari-${LINK}`);
+    cleanup();
+    const ua16 = s.hints!.browser!.ua.replace(/17_5/g, "16_6");
+    render(<App controller={fake(s.options)} hints={{ browser: { ua: ua16, touchPoints: 5 } }} />);
+    expect(screen.queryByTestId(TID.openInBrowser)).toBeNull();
+    expect(screen.getByTestId(TID.copyLink).className).toMatch(/btn--primary/);
+    expect(screen.getByTestId(TID.inAppNotice).textContent).toMatch(/Open in Safari/);
+  });
+
+  it("Home → Start a call asks for camera and mic in the same tap", async () => {
+    const c = fake({ initial: { local: { mediaRequest: "not-asked" } }, askDelayMs: 0 });
+    render(<App controller={c} />);
+    fireEvent.click(screen.getByTestId(TID.startCall));
+    await waitFor(() => expect(c.calls.map((x) => x.method)).toEqual(["prepare", "requestMedia"]));
+  });
+
+  it("in a call, mic/cam of a never-granted device are enabled and ask for that device only", async () => {
+    const c = fake({
+      initial: {
+        phase: "in-call",
+        link: LINK,
+        local: { mediaRequest: "not-asked", micOn: false, camOn: false },
+      },
+      askDelayMs: 0,
+    });
+    render(<App controller={c} />);
+    const cam = screen.getByTestId(TID.camToggle) as HTMLButtonElement;
+    const mic = screen.getByTestId(TID.micToggle) as HTMLButtonElement;
+    expect(cam.disabled).toBe(false);
+    expect(mic.disabled).toBe(false);
+    fireEvent.click(cam);
+    await waitFor(() => expect(c.state.value.local.camOn).toBe(true));
+    // A late camera grant never turns the mic on.
+    expect(c.state.value.local.micOn).toBe(false);
+    fireEvent.click(screen.getByTestId(TID.micToggle));
+    await waitFor(() => expect(c.state.value.local.micOn).toBe(true));
+    expect(c.state.value.local.camOn).toBe(true);
+  });
+
+  it("unsupported with a call link offers Open in Chrome + Copy link", () => {
+    const s = buildScenario("error-unsupported-inapp");
+    render(<App controller={fake(s.options)} hints={s.hints} />);
+    expect(screen.getByTestId(TID.openInBrowser).getAttribute("href")).toMatch(/^intent:\/\//);
+    expect(screen.getByTestId(TID.copyLink)).toBeTruthy();
+  });
+
+  it("unsupported: link from the address bar when the controller has none; none on Home", () => {
+    expect(unsupportedLink(null, { href: "https://x.app/c#abc", pathname: "/c", hash: "#abc" })).toBe(
+      "https://x.app/c#abc",
+    );
+    expect(unsupportedLink(null, { href: "https://x.app/", pathname: "/", hash: "" })).toBeNull();
+    expect(unsupportedLink(null, { href: "https://x.app/c", pathname: "/c", hash: "" })).toBeNull();
+    const c = fake({ initial: { phase: "error", error: { code: "unsupported" } } });
+    render(<App controller={c} hints={{ browser: { ua: CHROME_ANDROID } }} />);
+    expect(screen.queryByTestId(TID.openInBrowser)).toBeNull();
+    expect(screen.queryByTestId(TID.copyLink)).toBeNull();
+    expect(screen.getByTestId(TID.errorScreen).textContent).toMatch(/Chrome/);
   });
 
   it("error screen recovery uses errorAction, not rejoinButton", () => {

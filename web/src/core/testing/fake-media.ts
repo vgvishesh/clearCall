@@ -96,3 +96,57 @@ export class FakeAudioContext {
     };
   }
 }
+
+export class FakePermissionStatus {
+  private listeners = new Set<() => void>();
+  constructor(public state: string) {}
+  addEventListener(_t: "change", fn: () => void) {
+    this.listeners.add(fn);
+  }
+  removeEventListener(_t: "change", fn: () => void) {
+    this.listeners.delete(fn);
+  }
+  get listenerCount() {
+    return this.listeners.size;
+  }
+  set(state: string) {
+    this.state = state;
+    for (const fn of this.listeners) fn();
+  }
+}
+
+/**
+ * Fake `navigator.permissions` for camera + microphone. `set(kind, state)` changes the state silently (as Safari does
+ * after Settings); `change(kind, state)` also fires the `change` event. `throws` makes a name unsupported (Firefox).
+ */
+export class FakePermissions {
+  readonly status: Record<"camera" | "microphone", FakePermissionStatus>;
+  throws = new Set<string>();
+  queries: string[] = [];
+  /** When set, queries wait for it (a hanging webview). */
+  gate: Promise<void> | null = null;
+  constructor(camera = "granted", microphone = "granted") {
+    this.status = {
+      camera: new FakePermissionStatus(camera),
+      microphone: new FakePermissionStatus(microphone),
+    };
+  }
+  async query(d: { name: string }) {
+    this.queries.push(d.name);
+    if (this.gate) await this.gate;
+    if (this.throws.has(d.name)) throw new TypeError(`'${d.name}' is not a valid PermissionName`);
+    const s = this.status[d.name as "camera" | "microphone"];
+    if (!s) throw new TypeError("bad name");
+    return s;
+  }
+  set(kind: "camera" | "microphone", state: string) {
+    this.status[kind].state = state;
+  }
+  change(kind: "camera" | "microphone", state: string) {
+    this.status[kind].set(state);
+  }
+  setBoth(state: string) {
+    this.set("camera", state);
+    this.set("microphone", state);
+  }
+}

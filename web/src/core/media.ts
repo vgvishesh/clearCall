@@ -120,6 +120,30 @@ export interface LocalMediaState {
   error: CallError | null;
 }
 
+/** May the engine ask for this kind alone after a combined request was refused? (Only if it is already granted.) */
+export type RetryCheck = (kind: "audio" | "video") => boolean | Promise<boolean>;
+
+export interface CaptureOptions {
+  audio: boolean;
+  video: boolean;
+  /** Unmute the new mic / keep the new camera running (default true each). */
+  turnOn?: { audio?: boolean; video?: boolean };
+  /**
+   * After a combined request is refused (NotAllowedError), whether to retry one kind alone to find out which device
+   * is the problem. Absent → never (a second getUserMedia may show a second prompt for the same tap).
+   */
+  canRetrySeparately?: RetryCheck;
+}
+
+export interface CaptureResult {
+  /** Error for the kinds asked for (null = all obtained). */
+  error: CallError | null;
+  audio: boolean;
+  video: boolean;
+  /** Kinds the browser/user refused (NotAllowedError & co.). */
+  denied: ("audio" | "video")[];
+}
+
 export interface LocalMediaOptions {
   mediaDevices: MediaDevicesLike;
   MediaStream: typeof MediaStream;
@@ -162,7 +186,9 @@ export class LocalMedia {
   private listening = false;
   private recovering = new Set<"audio" | "video">();
   /** The user wants the camera on (button state); `state.camOn` additionally requires a live, unmuted track. */
-  private camWanted = true;
+  private camWanted = false;
+  /** Kinds the browser has granted at least once (a later camera tap needs no new permission request). */
+  private had = new Set<"audio" | "video">();
   private readonly log: Logger;
 
   constructor(private readonly o: LocalMediaOptions) {
@@ -185,80 +211,168 @@ export class LocalMedia {
     return run;
   }
 
-  /** Initial capture for the lobby. Resolves with the lobby error (if any); never rejects. */
-  acquire(opts: { mode?: AudioMode; facing?: Facing; video?: boolean } = {}): Promise<CallError | null> {
+  /**
+   * Fresh capture (lobby): drops any current tracks, asks for the mic plus the camera unless `video: false`.
+   * Resolves with the lobby error (if any); never rejects. A kind not asked for ends up unavailable (no track).
+   */
+  acquire(
+    opts: { mode?: AudioMode; facing?: Facing; video?: boolean; canRetrySeparately?: RetryCheck } = {},
+  ): Promise<CallError | null> {
     return this.exclusive(async () => {
-      this.stopped = false;
       const st = this.state;
       st.mode = opts.mode ?? st.mode;
       st.facing = opts.facing ?? st.facing;
-      const wantVideo = opts.video ?? true;
-      this.setAudioSession();
-      this.listen();
+      st.micOn = true;
       this.stopTracks();
-      let audio: MediaStreamTrack | null = null;
-      let video: MediaStreamTrack | null = null;
-      const errors: { kind: "audio" | "video"; e: unknown }[] = [];
+      const wantVideo = opts.video ?? true;
+      const r = await this.captureNow({
+        audio: true,
+        video: wantVideo,
+        ...(opts.canRetrySeparately ? { canRetrySeparately: opts.canRetrySeparately } : {}),
+      });
+      if (!wantVideo) {
+        st.camAvailable = false;
+        this.camWanted = false;
+        this.syncCam();
+        this.emit();
+      }
+      return r.error;
+    });
+  }
+
+  /**
+   * Capture the given kinds now, keeping the current track of every other kind (a late grant in a call: the new
+   * track goes to the transport via `onTrack` → `replaceTrack`, no renegotiation). `turnOn` (default on) says
+   * whether the new mic is unmuted / the new camera kept running — a late camera grant never turns the mic on.
+   * Never rejects.
+   */
+  capture(opts: CaptureOptions): Promise<CaptureResult> {
+    return this.exclusive(() => this.captureNow(opts));
+  }
+
+  /** A track of this kind was obtained at least once (the browser granted it). */
+  everHad(kind: "audio" | "video"): boolean {
+    return this.had.has(kind);
+  }
+
+  private async captureNow(opts: CaptureOptions): Promise<CaptureResult> {
+    this.stopped = false;
+    const st = this.state;
+    const kinds = (["audio", "video"] as const).filter((k) => opts[k]);
+    this.setAudioSession();
+    this.listen();
+    // iOS: release a device before asking for it again.
+    for (const k of kinds) {
+      try {
+        st[k]?.stop();
+      } catch {}
+      st[k] = null;
+    }
+    const got: Record<"audio" | "video", MediaStreamTrack | null> = { audio: null, video: null };
+    const errors: { kind: "audio" | "video"; e: unknown }[] = [];
+    const constraints = (k: "audio" | "video") =>
+      k === "audio" ? audioConstraints(st.mode, this.o.audioTuning) : videoConstraints(st.facing);
+    if (kinds.length) {
       try {
         const s = await this.o.mediaDevices.getUserMedia({
-          audio: audioConstraints(st.mode, this.o.audioTuning),
-          video: wantVideo ? videoConstraints(st.facing) : false,
+          audio: opts.audio ? constraints("audio") : false,
+          video: opts.video ? constraints("video") : false,
         });
-        audio = s.getAudioTracks()[0] ?? null;
-        video = s.getVideoTracks()[0] ?? null;
+        got.audio = opts.audio ? (s.getAudioTracks()[0] ?? null) : null;
+        got.video = opts.video ? (s.getVideoTracks()[0] ?? null) : null;
+        // Stray tracks we did not ask for (never expected) must not keep a device open.
+        for (const t of s.getTracks?.() ?? []) if (t !== got.audio && t !== got.video) t.stop();
       } catch (e) {
-        this.log.warn("getUserMedia(a+v) failed, trying separately", errInfo(e));
-        // Find out which device is the problem.
-        try {
-          audio =
-            (
-              await this.o.mediaDevices.getUserMedia({ audio: audioConstraints(st.mode, this.o.audioTuning) })
-            ).getAudioTracks()[0] ?? null;
-        } catch (ea) {
-          errors.push({ kind: "audio", e: ea });
-        }
-        if (wantVideo) {
-          try {
-            video =
-              (
-                await this.o.mediaDevices.getUserMedia({ video: videoConstraints(st.facing) })
-              ).getVideoTracks()[0] ?? null;
-          } catch (ev) {
-            errors.push({ kind: "video", e: ev });
+        const refused = classifyMediaError(e) === "permission-denied";
+        if (kinds.length === 1) errors.push({ kind: kinds[0]!, e });
+        else {
+          this.log.warn("getUserMedia(a+v) failed", { ...errInfo(e), refused });
+          // Find out which device is the problem — but after a refusal only for a device the browser reports as
+          // granted: one tap must never cause two prompts (Chrome auto-blocks after 3 dismissals).
+          for (const k of kinds) {
+            if (refused && !(await this.allowRetry(opts.canRetrySeparately, k))) {
+              errors.push({ kind: k, e });
+              continue;
+            }
+            try {
+              const s = await this.o.mediaDevices.getUserMedia({ [k]: constraints(k) });
+              got[k] = (k === "audio" ? s.getAudioTracks() : s.getVideoTracks())[0] ?? null;
+            } catch (ek) {
+              errors.push({ kind: k, e: ek });
+            }
           }
         }
       }
-      st.audio = audio;
-      st.video = video;
-      st.micAvailable = !!audio || !errors.some((x) => x.kind === "audio");
-      st.camAvailable = !!video || !errors.some((x) => x.kind === "video");
-      if (!audio) st.micAvailable = false;
-      if (wantVideo && !video) st.camAvailable = false;
-      st.micOn = !!audio && st.micOn;
-      if (audio) audio.enabled = st.micOn;
-      this.camWanted = !!video;
-      this.syncCam();
-      const kinds = errors.map((x) => classifyMediaError(x.e));
-      st.error =
-        errors.length === 0
-          ? null
-          : {
-              code: kinds.includes("permission-denied") ? "permission-denied" : "no-devices",
-              detail: errors.map((x) => `${x.kind}:${(x.e as { name?: string })?.name ?? "Error"}`).join(","),
-            };
-      for (const t of [audio, video]) if (t) this.watchTrack(t);
-      this.rebuildStream();
-      await this.refreshDevices();
-      this.startMeter();
-      this.log.info("acquired", {
-        audio: !!audio,
-        video: !!video,
-        mode: st.mode,
-        ...(st.error ? { code: st.error.code, detail: st.error.detail } : {}),
-      });
-      this.emit();
-      return st.error;
+    }
+    if (this.stopped) {
+      // stop() raced the prompt: release what we just got.
+      for (const t of [got.audio, got.video]) t?.stop();
+      return { error: null, audio: false, video: false, denied: [] };
+    }
+    const on = { audio: opts.turnOn?.audio ?? true, video: opts.turnOn?.video ?? true };
+    if (opts.audio) {
+      const a = got.audio;
+      st.audio = a;
+      st.micAvailable = !!a;
+      st.micOn = !!a && on.audio;
+      if (a) {
+        a.enabled = st.micOn;
+        this.had.add("audio");
+        this.watchTrack(a);
+      }
+    }
+    if (opts.video) {
+      let v = got.video;
+      if (v) this.had.add("video");
+      if (v && !on.video) {
+        v.stop(); // granted, but the user did not ask for the camera to run
+        v = null;
+      }
+      st.video = v;
+      st.camAvailable = !!got.video;
+      this.camWanted = !!v;
+      if (v) this.watchTrack(v);
+    }
+    if (!opts.video && !st.video && !this.had.has("video")) {
+      // Sound only: the camera was not asked for, so it is not available (the camera button asks for it).
+      st.camAvailable = false;
+      this.camWanted = false;
+    }
+    this.syncCam();
+    const classes = errors.map((x) => classifyMediaError(x.e));
+    st.error =
+      errors.length === 0
+        ? null
+        : {
+            code: classes.includes("permission-denied") ? "permission-denied" : "no-devices",
+            detail: errors.map((x) => `${x.kind}:${(x.e as { name?: string })?.name ?? "Error"}`).join(","),
+          };
+    this.rebuildStream();
+    for (const k of kinds) this.o.onTrack?.(k, st[k]);
+    await this.refreshDevices();
+    if (opts.audio) this.startMeter();
+    this.log.info("acquired", {
+      ...(opts.audio ? { audio: !!st.audio } : {}),
+      ...(opts.video ? { video: !!got.video } : {}),
+      mode: st.mode,
+      ...(st.error ? { code: st.error.code, detail: st.error.detail } : {}),
     });
+    this.emit();
+    return {
+      error: st.error,
+      audio: !!got.audio,
+      video: !!got.video,
+      denied: errors.filter((x) => classifyMediaError(x.e) === "permission-denied").map((x) => x.kind),
+    };
+  }
+
+  private async allowRetry(check: RetryCheck | undefined, kind: "audio" | "video"): Promise<boolean> {
+    if (!check) return false;
+    try {
+      return await check(kind);
+    } catch {
+      return false;
+    }
   }
 
   setMic(on: boolean): void {
@@ -344,6 +458,11 @@ export class LocalMedia {
       const st = this.state;
       if (st.mode === mode && st.audio) return;
       st.mode = mode;
+      if (!this.had.has("audio")) {
+        // Mic never granted: the next capture uses the new mode; asking now would be a prompt nobody tapped for.
+        this.emit();
+        return;
+      }
       if (st.audio) {
         st.audio.stop(); // iOS: stop before re-acquire
         st.audio = null;
@@ -394,7 +513,10 @@ export class LocalMedia {
           : { video: videoConstraints(facing) },
       );
       const t = (kind === "audio" ? s.getAudioTracks() : s.getVideoTracks())[0] ?? null;
-      if (t) this.watchTrack(t);
+      if (t) {
+        this.had.add(kind);
+        this.watchTrack(t);
+      }
       return t;
     } catch (e) {
       this.log.warn("getUserMedia failed", { kind, ...errInfo(e) });
@@ -470,7 +592,8 @@ export class LocalMedia {
     return this.exclusive(async () => {
       try {
         const st = this.state;
-        const want = kind === "audio" ? st.micAvailable : this.camWanted;
+        // Never re-ask for a device the browser has not granted yet: that would be a prompt without a tap.
+        const want = this.had.has(kind) && (kind === "audio" ? st.micAvailable : this.camWanted);
         const cur = kind === "audio" ? st.audio : st.video;
         if (!want || this.stopped) return;
         if (cur && cur.readyState === "live" && !cur.muted) return;
@@ -502,7 +625,7 @@ export class LocalMedia {
     const st = this.state;
     for (const kind of ["audio", "video"] as const) {
       const t = kind === "audio" ? st.audio : st.video;
-      const want = kind === "audio" ? st.micAvailable && !!st.stream : this.camWanted;
+      const want = this.had.has(kind) && (kind === "audio" ? st.micAvailable && !!st.stream : this.camWanted);
       if (want && (!t || t.readyState === "ended" || t.muted)) void this.recover(kind);
     }
     void this.resumeAudioContext();

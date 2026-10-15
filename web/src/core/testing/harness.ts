@@ -9,7 +9,7 @@ import type { CoreDeps, EventTargetLike } from "../deps.ts";
 import { roomCipher } from "../signaling-client.ts";
 import type { CallController } from "../types.ts";
 import { FakeClock } from "./fake-clock.ts";
-import { FakeDocument, FakeMediaDevices } from "./fake-media.ts";
+import { FakeDocument, FakeMediaDevices, FakePermissions } from "./fake-media.ts";
 import { type FakeServerOptions, FakeSignalingServer } from "./fake-signaling.ts";
 import { createFakeRtc, FakeMediaStream } from "./fake-webrtc.ts";
 
@@ -68,6 +68,8 @@ export interface Participant {
   c: CallController & CallControllerInternals;
   deps: CoreDeps;
   devices: FakeMediaDevices;
+  /** Camera + mic already granted by default (the quality-lab / E2E path: acquire on prepare). */
+  perms: FakePermissions;
   doc: FakeDocument;
   win: FakeWindow;
   audioEls: FakeAudioEl[];
@@ -78,6 +80,7 @@ export interface Participant {
 
 export function createParticipant(w: World, overrides: Partial<CoreDeps> = {}): Participant {
   const devices = new FakeMediaDevices();
+  const perms = new FakePermissions();
   const doc = new FakeDocument();
   const win = new FakeWindow();
   const audioEls: FakeAudioEl[] = [];
@@ -92,6 +95,7 @@ export function createParticipant(w: World, overrides: Partial<CoreDeps> = {}): 
     RTCPeerConnection: w.rtc.RTCPeerConnection,
     MediaStream: FakeMediaStream as unknown as typeof MediaStream,
     mediaDevices: devices,
+    permissions: perms,
     getCapabilities: () => null,
     mediaCapabilities: undefined,
     userAgent: "",
@@ -129,5 +133,5 @@ export function createParticipant(w: World, overrides: Partial<CoreDeps> = {}): 
     ...overrides,
   };
   const c = createCallController(deps);
-  return { c, deps, devices, doc, win, audioEls, storage, qaTarget, replaceState };
+  return { c, deps, devices, perms, doc, win, audioEls, storage, qaTarget, replaceState };
 }

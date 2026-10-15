@@ -100,12 +100,64 @@ describe("LocalMedia.acquire", () => {
     expect(media.state.stream!.getTracks()).toHaveLength(1);
   });
 
-  it("camera denied, mic fine → permission-denied with camAvailable=false", async () => {
+  it("camera denied, mic already granted → retries the mic alone: permission-denied with camAvailable=false", async () => {
+    const { media, devices } = setup();
+    devices.fail = { video: "NotAllowedError" };
+    const asked: string[] = [];
+    const err = await media.acquire({
+      canRetrySeparately: (k) => {
+        asked.push(k);
+        return k === "audio";
+      },
+    });
+    expect(err).toEqual({ code: "permission-denied", detail: "video:NotAllowedError" });
+    expect(asked).toEqual(["audio", "video"]);
+    expect(devices.calls).toHaveLength(2); // combined + mic alone; never the camera alone
+    expect(media.state.micAvailable).toBe(true);
+    expect(media.state.camAvailable).toBe(false);
+  });
+
+  it("one tap = at most one prompt: a refused combined request is not followed by per-device requests", async () => {
     const { media, devices } = setup();
     devices.fail = { video: "NotAllowedError" };
     expect((await media.acquire())?.code).toBe("permission-denied");
-    expect(media.state.micAvailable).toBe(true);
-    expect(media.state.camAvailable).toBe(false);
+    expect(devices.calls).toHaveLength(1);
+    expect(media.state).toMatchObject({
+      micAvailable: false,
+      camAvailable: false,
+      micOn: false,
+      camOn: false,
+    });
+    // a check that throws counts as "not granted"
+    const again = await media.acquire({
+      canRetrySeparately: () => {
+        throw new Error("x");
+      },
+    });
+    expect(again?.code).toBe("permission-denied");
+    expect(devices.calls).toHaveLength(2);
+  });
+
+  it("non-permission failures (missing camera) still probe each device", async () => {
+    const { media, devices } = setup();
+    devices.fail = { video: "NotFoundError" };
+    await media.acquire();
+    expect(devices.calls.map((c) => Object.keys(c).filter((k) => c[k as "audio"]))).toEqual([
+      ["audio", "video"],
+      ["audio"],
+      ["video"],
+    ]);
+  });
+
+  it("sound only: no camera request, camera unavailable, and never re-asked on visibility", async () => {
+    const { media, devices, doc } = setup();
+    expect(await media.acquire({ video: false })).toBeNull();
+    expect(devices.calls).toEqual([{ audio: audioConstraints("voice"), video: false }]);
+    expect(media.state).toMatchObject({ micOn: true, camOn: false, camAvailable: false, micAvailable: true });
+    doc.setVisibility("hidden");
+    doc.setVisibility("visible");
+    await settle();
+    expect(devices.calls).toHaveLength(1);
   });
 
   it("single camera → canSwitchCamera false", async () => {
@@ -198,6 +250,7 @@ describe("LocalMedia recovery", () => {
   it("iOS background: waits for visibility, then replaces muted/ended tracks", async () => {
     const { media, doc, trackEvents } = setup();
     await media.acquire();
+    expect(trackEvents.map((e) => e[0])).toEqual(["audio", "video"]); // initial tracks reach the transport too
     doc.setVisibility("hidden");
     const cam = ft(media.state.video)!;
     cam.end();
@@ -208,7 +261,12 @@ describe("LocalMedia recovery", () => {
     await settle();
     expect(media.state.video).not.toBe(cam);
     expect(ft(media.state.audio)!.muted).toBe(false);
-    expect(trackEvents.map((e) => e[0]).sort()).toEqual(["audio", "video"]);
+    expect(
+      trackEvents
+        .slice(2)
+        .map((e) => e[0])
+        .sort(),
+    ).toEqual(["audio", "video"]);
   });
 
   it("does not resurrect a camera the user turned off", async () => {
@@ -317,5 +375,61 @@ describe("local level meter", () => {
     expect(meterLevel(new Float32Array(64), 1)).toBe(0.8);
     const quiet = new Float32Array(64).fill(0.001); // −60 dBFS
     expect(meterLevel(quiet, 0)).toBe(0);
+  });
+});
+
+describe("LocalMedia.capture (late grants)", () => {
+  it("adds the camera to a mic-only capture without touching the mic; only the camera goes to the transport", async () => {
+    const { media, devices, trackEvents } = setup();
+    await media.acquire({ video: false });
+    const mic = media.state.audio;
+    trackEvents.length = 0;
+    const r = await media.capture({ audio: false, video: true });
+    expect(r).toEqual({ error: null, audio: false, video: true, denied: [] });
+    expect(devices.calls.at(-1)).toEqual({ audio: false, video: videoConstraints("user") });
+    expect(media.state.audio).toBe(mic);
+    expect(media.state).toMatchObject({ camOn: true, camAvailable: true, micOn: true });
+    expect(trackEvents.map((e) => e[0])).toEqual(["video"]);
+    expect(media.state.stream!.getTracks()).toHaveLength(2);
+  });
+
+  it("turnOn:false keeps a newly granted mic muted (a camera tap never turns the mic on)", async () => {
+    const { media } = setup();
+    const r = await media.capture({ audio: true, video: true, turnOn: { audio: false } });
+    expect(r.audio && r.video).toBe(true);
+    expect(media.state).toMatchObject({ micOn: false, micAvailable: true, camOn: true });
+    expect(media.state.audio!.enabled).toBe(false);
+    expect(media.everHad("audio")).toBe(true);
+  });
+
+  it("reports refused kinds; nothing captured before a grant is ever recovered or re-asked", async () => {
+    const { media, devices, doc } = setup();
+    devices.fail = { audio: "NotAllowedError", video: "NotAllowedError" };
+    const r = await media.capture({ audio: true, video: true });
+    expect(r.denied.sort()).toEqual(["audio", "video"]);
+    expect(media.everHad("audio")).toBe(false);
+    devices.fail = {};
+    doc.setVisibility("hidden");
+    doc.setVisibility("visible");
+    devices.fireDeviceChange();
+    await settle();
+    await media.setMode("music"); // mode remembered, no capture
+    expect(media.state.mode).toBe("music");
+    expect(devices.calls).toHaveLength(1);
+  });
+
+  it("stop() while the prompt is open releases whatever arrives", async () => {
+    const { media, devices } = setup();
+    let open!: () => void;
+    devices.gate = new Promise((r) => {
+      open = r;
+    });
+    const p = media.capture({ audio: true, video: true });
+    await settle();
+    media.stop();
+    open();
+    expect(await p).toMatchObject({ audio: false, video: false });
+    expect(devices.live("audio")).toHaveLength(0);
+    expect(devices.live("video")).toHaveLength(0);
   });
 });
